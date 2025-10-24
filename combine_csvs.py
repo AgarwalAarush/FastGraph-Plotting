@@ -2,30 +2,37 @@ import pandas as pd
 import glob
 import os
 
-# Process FAISS CSV files
-faiss_files = glob.glob('faiss-csv/*.csv')
-faiss_dataframes = []
+process_hnswlib = False
+process_annoy = True
 
-for file in faiss_files:
+# Process HNSWLIB CSV files
+hnswlib_files = glob.glob('hnswlib-data/*.csv')
+hnswlib_dataframes = []
+
+for file in hnswlib_files:
     df = pd.read_csv(file)
-    faiss_dataframes.append(df)
+    hnswlib_dataframes.append(df)
 
-if faiss_dataframes:
-    faiss_combined_df = pd.concat(faiss_dataframes, ignore_index=True)
-    faiss_combined_df.to_csv('faiss_data.csv', index=False)
-    print(f"Combined {len(faiss_files)} FAISS CSV files into faiss_data.csv")
-    print(f"FAISS total rows: {len(faiss_combined_df)}")
+if hnswlib_dataframes and process_hnswlib:
+    hnswlib_combined_df = pd.concat(hnswlib_dataframes, ignore_index=True)
+    hnswlib_combined_df.to_csv('hnswlib_data.csv', index=False)
+    print(f"Combined {len(hnswlib_files)} HNSWLIB CSV files into hnswlib_data.csv")
+    print(f"HNSWLIB total rows: {len(hnswlib_combined_df)}")
+else:
+    print("No HNSWLIB CSV files found in hnswlib-data/ directory")
 
-# Process ScaNN CSV files
-scann_files = glob.glob('scann-csv/*.csv')
-scann_dataframes = []
+# Process Annoy CSV files
+annoy_files = glob.glob('annoy-data/*.csv')
+annoy_dataframes = []
 
-for file in scann_files:
+for file in annoy_files:
     df = pd.read_csv(file)
-    scann_dataframes.append(df)
+    annoy_dataframes.append(df)
 
-if scann_dataframes:
-    scann_combined_df = pd.concat(scann_dataframes, ignore_index=True)
-    scann_combined_df.to_csv('scann_data.csv', index=False)
-    print(f"Combined {len(scann_files)} ScaNN CSV files into scann_data.csv")
-    print(f"ScaNN total rows: {len(scann_combined_df)}")
+if annoy_dataframes and process_annoy:
+    annoy_combined_df = pd.concat(annoy_dataframes, ignore_index=True)
+    annoy_combined_df.to_csv('annoy_data.csv', index=False)
+    print(f"Combined {len(annoy_files)} Annoy CSV files into annoy_data.csv")
+    print(f"Annoy total rows: {len(annoy_combined_df)}")
+else:
+    print("No Annoy CSV files found in annoy-data/ directory")
