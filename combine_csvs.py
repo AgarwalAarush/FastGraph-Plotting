@@ -1,38 +1,32 @@
-import pandas as pd
 import glob
 import os
+import pandas as pd
 
-process_ggnn = True
-process_annoy = False
+ALGORITHMS = [
+    ("GGNN", "ggnn-data", "ggnn_data.csv"),
+    ("Annoy", "annoy-data", "annoy_data.csv"),
+    ("FAISS", "faiss-data", "faiss_data.csv"),
+    ("HNSWLIB", "hnswlib-data", "hnswlib_data.csv"),
+    ("ScaNN", "scann-data", "scann_data.csv"),
+]
 
-# Process GGNN CSV files
-ggnn_files = glob.glob('ggnn-data/*.csv')
-ggnn_dataframes = []
 
-for file in ggnn_files:
-    df = pd.read_csv(file)
-    ggnn_dataframes.append(df)
+def combine_csvs():
+    """Combine per-run CSVs into a single CSV per algorithm."""
+    for name, directory, output in ALGORITHMS:
+        csv_pattern = os.path.join(directory, "*.csv")
+        csv_files = sorted(glob.glob(csv_pattern))
 
-if ggnn_dataframes and process_ggnn:
-    ggnn_combined_df = pd.concat(ggnn_dataframes, ignore_index=True)
-    ggnn_combined_df.to_csv('ggnn_data.csv', index=False)
-    print(f"Combined {len(ggnn_files)} GGNN CSV files into ggnn_data.csv")
-    print(f"GGNN total rows: {len(ggnn_combined_df)}")
-else:
-    print("No GGNN CSV files found in ggnn-data/ directory")
+        if not csv_files:
+            print(f"No {name} CSV files found in {directory}/ directory")
+            continue
 
-# # Process Annoy CSV files
-# annoy_files = glob.glob('annoy-data/*.csv')
-# annoy_dataframes = []
+        dataframes = [pd.read_csv(path) for path in csv_files]
+        combined_df = pd.concat(dataframes, ignore_index=True)
+        combined_df.to_csv(output, index=False)
+        print(f"Combined {len(csv_files)} {name} CSV files into {output}")
+        print(f"{name} total rows: {len(combined_df)}")
 
-# for file in annoy_files:
-#     df = pd.read_csv(file)
-#     annoy_dataframes.append(df)
 
-# if annoy_dataframes and process_annoy:
-#     annoy_combined_df = pd.concat(annoy_dataframes, ignore_index=True)
-#     annoy_combined_df.to_csv('annoy_data.csv', index=False)
-#     print(f"Combined {len(annoy_files)} Annoy CSV files into annoy_data.csv")
-#     print(f"Annoy total rows: {len(annoy_combined_df)}")
-# else:
-#     print("No Annoy CSV files found in annoy-data/ directory")
+if __name__ == "__main__":
+    combine_csvs()

@@ -1,7 +1,7 @@
 
-import pandas as pd
-import numpy as np
 import os
+import numpy as np
+import pandas as pd
 
 
 def process_csv(file_path: str, output_path: str, time_cols: list, key_cols: list):
@@ -20,6 +20,11 @@ def process_csv(file_path: str, output_path: str, time_cols: list, key_cols: lis
 
     print(f"Processing {file_path}...")
     df = pd.read_csv(file_path)
+
+    if 'dims' in df.columns and 'dimension' not in df.columns:
+        df = df.rename(columns={'dims': 'dimension'})
+        df.to_csv(file_path, index=False)
+        print(f"Renamed 'dims' to 'dimension' in {file_path}")
 
     # Ensure all necessary columns are present
     required_cols = key_cols + time_cols + ['count']
@@ -47,31 +52,31 @@ def main():
     """Main function to process all algorithm CSVs."""
 
     algorithms_to_process = [
-        # {
-        #     'name': 'FAISS',
-        #     'file': 'faiss_data.csv',
-        #     'time_cols': ['faiss_time', 'fgc_time'],
-        # },
-        # {
-        #     'name': 'ScaNN',
-        #     'file': 'scann_data.csv',
-        #     'time_cols': ['scann_time', 'fgc_time'],
-        # },
-        # {
-        #     'name': 'HNSWLIB',
-        #     'file': 'hnswlib_data.csv',
-        #     'time_cols': ['hnswlib_time', 'fgc_time'],
-        # },
-        # {
-        #     'name': 'Annoy',
-        #     'file': 'annoy_data.csv',
-        #     'time_cols': ['annoy_time', 'fgc_time'],
-        # }
         {
             'name': 'GGNN',
             'file': 'ggnn_data.csv',
             'time_cols': ['ggnn_time', 'fgc_time'],
-        }
+        },
+        {
+            'name': 'Annoy',
+            'file': 'annoy_data.csv',
+            'time_cols': ['annoy_time', 'fgc_time'],
+        },
+        {
+            'name': 'FAISS',
+            'file': 'faiss_data.csv',
+            'time_cols': ['faiss_time', 'fgc_time'],
+        },
+        {
+            'name': 'HNSWLIB',
+            'file': 'hnswlib_data.csv',
+            'time_cols': ['hnswlib_time', 'fgc_time'],
+        },
+        {
+            'name': 'ScaNN',
+            'file': 'scann_data.csv',
+            'time_cols': ['scann_time', 'fgc_time'],
+        },
     ]
 
     key_columns = ['size', 'k', 'dimension']
@@ -84,12 +89,6 @@ def main():
 
     for algo in algorithms_to_process:
         file_path = algo['file']
-        df = pd.read_csv(file_path)
-        if 'dims' in df.columns and 'dimension' not in df.columns:
-            df = df.rename(columns={'dims': 'dimension'})
-            df.to_csv(file_path, index=False)  # save it back for consistency
-            print(f"Renamed 'dims' to 'dimension' in {file_path}")
-
         output_file = file_path.replace('.csv', '_cleaned.csv')
         process_csv(file_path, output_file, algo['time_cols'], key_columns)
 
