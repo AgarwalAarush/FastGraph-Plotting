@@ -48,6 +48,66 @@ ALGORITHMS = {
 MAX_DATASET_SIZE = 5_000_000  # Cap all analyses at 5M data points
 
 
+def combine_scann_files(scann_dir: str) -> pd.DataFrame:
+    """
+    Combine all SCANN CSV files from the scann-data directory.
+
+    Args:
+        scann_dir: Path to the directory containing SCANN CSV files.
+
+    Returns:
+        Combined DataFrame with standardized columns.
+    """
+    if not os.path.exists(scann_dir):
+        print(f"SCANN directory not found: {scann_dir}")
+        return pd.DataFrame()
+
+    print(f"Combining SCANN files from {scann_dir}...")
+    all_data = []
+
+    # Get all CSV files in the directory
+    csv_files = [f for f in os.listdir(scann_dir) if f.endswith('.csv')]
+    print(f"Found {len(csv_files)} SCANN CSV files to process")
+
+    for filename in csv_files:
+        file_path = os.path.join(scann_dir, filename)
+        try:
+            df = pd.read_csv(file_path)
+            print(f"  Processing {filename}: {len(df)} records")
+
+            # Standardize columns based on file type
+            if 'size' in df.columns and 'fixed_dimension' in df.columns:
+                # Size-varying files: size is variable, fixed_dimension is constant
+                df = df.rename(columns={'fixed_dimension': 'dimension'})
+                df = df[['size', 'k', 'dimension',
+                         'scann_time', 'fgc_time', 'count']]
+            elif 'dimension' in df.columns and 'fixed_size' in df.columns:
+                # Dimension-varying files: dimension is variable, fixed_size is constant
+                df = df.rename(columns={'fixed_size': 'size'})
+                df = df[['size', 'k', 'dimension',
+                         'scann_time', 'fgc_time', 'count']]
+            else:
+                print(
+                    f"  Warning: Unexpected column structure in {filename}, skipping")
+                continue
+
+            all_data.append(df)
+
+        except Exception as e:
+            print(f"  Error processing {filename}: {e}")
+            continue
+
+    if not all_data:
+        print("No valid SCANN data found!")
+        return pd.DataFrame()
+
+    # Combine all data
+    combined_df = pd.concat(all_data, ignore_index=True)
+    print(f"Combined SCANN data: {len(combined_df)} total records")
+
+    return combined_df
+
+
 def process_csv(file_path: str, output_path: str, time_cols: list, key_cols: list):
     """
     Loads a CSV, processes duplicates by weighted average, and saves the result.
@@ -90,6 +150,48 @@ def process_csv(file_path: str, output_path: str, time_cols: list, key_cols: lis
     # Save cleaned data
     df_cleaned.to_csv(output_path, index=False)
     print(f"Saved cleaned data to {output_path}")
+
+
+def process_scann_data(output_path: str):
+    """
+    Special handler for SCANN data that combines multiple CSV files.
+
+    Args:
+        output_path: Path to save the cleaned combined CSV file.
+    """
+    # Combine all SCANN files from the scann-data directory
+    combined_df = combine_scann_files('scann-data')
+
+    if combined_df.empty:
+        print("No SCANN data to process!")
+        return
+
+    # Define processing parameters
+    time_cols = ['scann_time', 'fgc_time']
+    key_cols = ['size', 'k', 'dimension']
+
+    # Ensure all necessary columns are present
+    required_cols = key_cols + time_cols + ['count']
+    if not all(col in combined_df.columns for col in required_cols):
+        print(f"Missing required columns in combined SCANN data. Skipping.")
+        return
+
+    print(f"Processing combined SCANN data: {len(combined_df)} records")
+
+    # Define aggregation logic for weighted averages
+    agg_funs = {}
+    for col in time_cols:
+        agg_funs[col] = lambda x: np.average(
+            x, weights=combined_df.loc[x.index, 'count'])
+
+    agg_funs['count'] = 'sum'
+
+    # Group and aggregate
+    df_cleaned = combined_df.groupby(key_cols).agg(agg_funs).reset_index()
+
+    # Save cleaned data
+    df_cleaned.to_csv(output_path, index=False)
+    print(f"Saved cleaned SCANN data to {output_path}")
 
 
 def load_and_prepare_data() -> pd.DataFrame:
@@ -157,11 +259,16 @@ def load_and_prepare_data() -> pd.DataFrame:
 def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) -> go.Figure:
     """Create FGC speedup analysis plot with all algorithms."""
 
+    y_axis_cap = kwargs.get('y_axis_cap', None)
+    custom_title = kwargs.get('custom_title', None)
+
     if analysis_type == 'dimensions':
         size = kwargs.get('size', 1_000_000)
         k = kwargs.get('k', 40)
         max_dimensions = kwargs.get('max_dimensions', 20)
         title = f"FGC Speedup Analysis: {size//1_000_000}M Points, K={k}"
+        if y_axis_cap:
+            title += f" (Y-Axis Capped at {y_axis_cap})"
 
         # Filter data
         filtered_data = data[
@@ -178,6 +285,8 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         dimension = kwargs.get('dimension', 3)
         k = kwargs.get('k', 40)
         title = f"FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
+        if y_axis_cap:
+            title += f" (Y-Axis Capped at {y_axis_cap})"
 
         # Filter data
         filtered_data = data[
@@ -265,11 +374,18 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
             ticktext=['0', '1M', '2M', '3M', '4M', '5M']
         )
 
-    fig.update_yaxes(
-        gridcolor='lightgray',
-        title="FGC Speedup Factor",
-        title_font_size=14
-    )
+    y_axis_config = {
+        'gridcolor': 'lightgray',
+        'title': "FGC Speedup Factor",
+        'title_font_size': 14
+    }
+    if y_axis_cap:
+        y_axis_config['range'] = [0, y_axis_cap]
+
+    fig.update_yaxes(**y_axis_config)
+
+    if custom_title:
+        title = custom_title
 
     fig.update_layout(
         title=dict(
@@ -293,6 +409,101 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
             borderwidth=1
         ),
         margin=dict(t=80, b=60, l=80, r=80)
+    )
+
+    return fig
+
+
+def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs) -> go.Figure:
+    """
+    Create side-by-side plot with standard and zoomed (y-axis capped) views.
+
+    Args:
+        data: Unified DataFrame with all algorithm data
+        analysis_type: 'dimensions' or 'sizes'
+        **kwargs: Additional parameters including y_axis_cap for zoomed view
+    """
+    y_axis_cap = kwargs.pop('y_axis_cap', 50)
+
+    if analysis_type == 'dimensions':
+        dimension = kwargs.get('dimension', None)
+        size = kwargs.get('size', 1_000_000)
+        k = kwargs.get('k', 40)
+        max_dimensions = kwargs.get('max_dimensions', 15)
+
+        subtitle_left = f"Standard View (d ≤ {max_dimensions})"
+        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        main_title = f"FGC Dimensional Scaling Analysis ({size//1_000_000}M Vectors, K={k})"
+    else:  # sizes
+        dimension = kwargs.get('dimension', 3)
+        k = kwargs.get('k', 40)
+        subtitle_left = f"Standard View"
+        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        main_title = f"FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=(subtitle_left, subtitle_right),
+        horizontal_spacing=0.08
+    )
+
+    # Generate standard view
+    fig_normal = plot_fgc_speedup_analysis(
+        data, analysis_type, custom_title=" ", **kwargs)
+
+    # Generate zoomed view
+    fig_zoomed = plot_fgc_speedup_analysis(
+        data, analysis_type, custom_title=" ", y_axis_cap=y_axis_cap, **kwargs)
+
+    # Add traces from normal plot to first subplot
+    for trace in fig_normal.data:
+        fig.add_trace(trace, row=1, col=1)
+
+    # Add traces from zoomed plot to second subplot (no legend to avoid duplicates)
+    for trace in fig_zoomed.data:
+        trace.showlegend = False
+        fig.add_trace(trace, row=1, col=2)
+
+    # Update axes
+    if analysis_type == 'dimensions':
+        x_title = "Number of Dimensions (d)"
+    else:
+        x_title = "Dataset Size"
+
+    fig.update_xaxes(title_text=x_title, row=1, col=1)
+    fig.update_xaxes(title_text=x_title, row=1, col=2)
+    fig.update_yaxes(title_text="FGC Speedup Factor", row=1, col=1)
+    fig.update_yaxes(title_text="FGC Speedup Factor",
+                     range=[0, y_axis_cap], row=1, col=2)
+
+    if analysis_type == 'sizes':
+        for col in [1, 2]:
+            fig.update_xaxes(
+                tickmode='array',
+                tickvals=[0, 1_000_000, 2_000_000,
+                          3_000_000, 4_000_000, 5_000_000],
+                ticktext=['0', '1M', '2M', '3M', '4M', '5M'],
+                row=1, col=col
+            )
+
+    # Update main layout
+    fig.update_layout(
+        title_text=main_title,
+        height=600,
+        width=1400,
+        template='plotly_white',
+        font=dict(family="Arial", size=12),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1
+        ),
+        margin=dict(t=80, b=120, l=80, r=80)
     )
 
     return fig
@@ -380,15 +591,17 @@ def create_plots():
     if not os.path.exists('plots'):
         os.makedirs('plots')
 
-    # 1. d3: K=40, size iterate
-    print("\n1. Creating FGC speedup analysis: D=3, K=40, varying sizes...")
-    fig1 = plot_fgc_speedup_analysis(data, 'sizes', dimension=3, k=40)
-    save_figure(fig1, 'plots/fgc_speedup_d3_all_algorithms.png', 1200, 500)
+    # 1. d3: K=40, size iterate (side-by-side with zoom)
+    print("\n1. Creating FGC speedup analysis: D=3, K=40, varying sizes (with zoom)...")
+    fig1 = plot_side_by_side_with_zoom(
+        data, 'sizes', dimension=3, k=40, y_axis_cap=100)
+    save_figure(fig1, 'plots/fgc_speedup_d3_all_algorithms.png', 1400, 600)
 
-    # 2. d5: K=40, size iterate
-    print("\n2. Creating FGC speedup analysis: D=5, K=40, varying sizes...")
-    fig2 = plot_fgc_speedup_analysis(data, 'sizes', dimension=5, k=40)
-    save_figure(fig2, 'plots/fgc_speedup_d5_all_algorithms.png', 1200, 500)
+    # 2. d5: K=40, size iterate (side-by-side with zoom)
+    print("\n2. Creating FGC speedup analysis: D=5, K=40, varying sizes (with zoom)...")
+    fig2 = plot_side_by_side_with_zoom(
+        data, 'sizes', dimension=5, k=40, y_axis_cap=100)
+    save_figure(fig2, 'plots/fgc_speedup_d5_all_algorithms.png', 1400, 600)
 
     # 3. k comparison: 10, 40, 100 @ dimension iteration, 1M size
     print("\n3. Creating K comparison dimensional analysis: K=10,40,100 @ 1M...")
@@ -396,19 +609,19 @@ def create_plots():
     save_figure(
         fig3, 'plots/fgc_k_comparison_1M_d2-10_all_algorithms.png', 1800, 600)
 
-    # 4. dimensional scaling, 1M, K=40
-    print("\n4. Creating dimensional scaling analysis: 1M, K=40...")
-    fig4 = plot_fgc_speedup_analysis(
-        data, 'dimensions', size=1_000_000, k=40, max_dimensions=15)
+    # 4. dimensional scaling, 1M, K=40 (side-by-side with zoom)
+    print("\n4. Creating dimensional scaling analysis: 1M, K=40 (with zoom)...")
+    fig4 = plot_side_by_side_with_zoom(
+        data, 'dimensions', size=1_000_000, k=40, max_dimensions=15, y_axis_cap=50)
     save_figure(
-        fig4, 'plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png', 800, 500)
+        fig4, 'plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png', 1400, 600)
 
     print(f"\n" + "="*60)
     print("Plot Generation Complete! Generated files:")
-    print("• plots/fgc_speedup_d3_all_algorithms.png")
-    print("• plots/fgc_speedup_d5_all_algorithms.png")
+    print("• plots/fgc_speedup_d3_all_algorithms.png (side-by-side with zoom)")
+    print("• plots/fgc_speedup_d5_all_algorithms.png (side-by-side with zoom)")
     print("• plots/fgc_k_comparison_1M_d2-10_all_algorithms.png")
-    print("• plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png")
+    print("• plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png (side-by-side with zoom)")
     print("="*60)
 
 
@@ -436,25 +649,21 @@ def main():
             'file': 'hnswlib_data.csv',
             'time_cols': ['hnswlib_time', 'fgc_time'],
         },
-        {
-            'name': 'ScaNN',
-            'file': 'scann_data.csv',
-            'time_cols': ['scann_time', 'fgc_time'],
-        },
     ]
 
     key_columns = ['size', 'k', 'dimension']
 
-    # In scann_data.csv, the dimension column is named 'dimension' not 'dims'
-    # so no special handling is needed if the file is consistent.
-    # We will add a check for 'dims' and rename it for compatibility.
-
     print("Starting CSV processing...")
 
+    # Process regular algorithms
     for algo in algorithms_to_process:
         file_path = algo['file']
         output_file = file_path.replace('.csv', '_cleaned.csv')
         process_csv(file_path, output_file, algo['time_cols'], key_columns)
+
+    # Process SCANN data specially (combines multiple files)
+    print("\nProcessing SCANN data...")
+    process_scann_data('scann_data_cleaned.csv')
 
     print("\nProcessing complete.")
 
