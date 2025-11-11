@@ -385,7 +385,8 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         range=x_range,
         gridcolor='lightgray',
         title=x_title,
-        title_font_size=14
+        title_font_size=18,
+        tickfont=dict(size=16)
     )
 
     if analysis_type == 'sizes':
@@ -407,7 +408,8 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
     y_axis_config = {
         'gridcolor': 'lightgray',
         'title': "FGC Speedup Factor",
-        'title_font_size': 14
+        'title_font_size': 18,
+        'tickfont': dict(size=16)
     }
     if y_axis_cap:
         y_axis_config['range'] = [0, y_axis_cap]
@@ -421,13 +423,13 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         title=dict(
             text=title,
             x=0.5,
-            font_size=16,
+            font_size=21,
             font_family="Arial"
         ),
         height=500,
         width=800 if analysis_type == 'dimensions' else 1200,
         template='plotly_white',
-        font=dict(family="Arial", size=12),
+        font=dict(family="Arial", size=16),
         legend=dict(
             orientation="v",
             yanchor="top",
@@ -476,6 +478,9 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
         subplot_titles=(subtitle_left, subtitle_right),
         horizontal_spacing=0.08
     )
+    # Update subplot title font size
+    for annotation in fig['layout']['annotations']:
+        annotation['font'] = dict(size=16)
 
     # Generate standard view
     fig_normal = plot_fgc_speedup_analysis(
@@ -500,10 +505,13 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
     else:
         x_title = "Dataset Size"
 
-    fig.update_xaxes(title_text=x_title, row=1, col=1)
-    fig.update_xaxes(title_text=x_title, row=1, col=2)
-    fig.update_yaxes(title_text="FGC Speedup Factor", row=1, col=1)
+    fig.update_xaxes(title_text=x_title, title_font_size=18,
+                     tickfont=dict(size=16), row=1, col=1)
+    fig.update_xaxes(title_text=x_title, title_font_size=18,
+                     tickfont=dict(size=16), row=1, col=2)
     fig.update_yaxes(title_text="FGC Speedup Factor",
+                     title_font_size=18, tickfont=dict(size=16), row=1, col=1)
+    fig.update_yaxes(title_text="FGC Speedup Factor", title_font_size=18, tickfont=dict(size=16),
                      range=[0, y_axis_cap], row=1, col=2)
 
     if analysis_type == 'sizes':
@@ -527,10 +535,11 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
     # Update main layout - position legend on rightmost subplot (col=2)
     fig.update_layout(
         title_text=main_title,
+        title_font_size=21,
         height=600,
         width=1400,
         template='plotly_white',
-        font=dict(family="Arial", size=12),
+        font=dict(family="Arial", size=16),
         legend=dict(
             orientation="v",
             yanchor="top",
@@ -554,6 +563,9 @@ def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
         subplot_titles=("K=10", "K=40", "K=100"),
         horizontal_spacing=0.08
     )
+    # Update subplot title font size
+    for annotation in fig['layout']['annotations']:
+        annotation['font'] = dict(size=16)
 
     k_values = [10, 40, 100]
 
@@ -576,21 +588,26 @@ def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
     for i in range(1, 4):
         fig.update_xaxes(
             title_text="Number of Dimensions (d)",
+            title_font_size=18,
+            tickfont=dict(size=16),
             range=[2, 10],
             row=1, col=i
         )
         fig.update_yaxes(
             title_text="FGC Speedup Factor" if i == 1 else "",
+            title_font_size=18 if i == 1 else None,
+            tickfont=dict(size=16),
             row=1, col=i
         )
 
     # Update main layout - position legend on rightmost subplot (col=3)
     fig.update_layout(
         title_text="FGC Dimensional Scaling Analysis: K Comparison (1M Vectors, d=2-10)",
+        title_font_size=21,
         height=600,
         width=1800,
         template='plotly_white',
-        font=dict(family="Arial", size=12),
+        font=dict(family="Arial", size=16),
         legend=dict(
             orientation="v",
             yanchor="top",
