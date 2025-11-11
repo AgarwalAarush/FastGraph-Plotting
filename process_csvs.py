@@ -47,6 +47,10 @@ ALGORITHMS = {
 
 MAX_DATASET_SIZE = 5_000_000  # Cap all analyses at 5M data points
 
+# Configuration flag: Set to False to skip CSV processing and only create plots from existing _cleaned files
+# Set to False to skip processing and use existing cleaned files
+PROCESS_CSV_FILES = False
+
 
 def combine_algorithm_files(algorithm_dir: str, algorithm_name: str, time_column: str) -> pd.DataFrame:
     """
@@ -294,21 +298,32 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         alg_info = ALGORITHMS[algorithm]
         time_col = alg_info['time_column']
 
-        if time_col not in filtered_data.columns or 'fgc_time' not in filtered_data.columns:
+        # Determine which fgc_time column to use
+        # For FAISS (base algorithm), use 'fgc_time'
+        # For other algorithms, prefer 'fgc_time_{algorithm.lower()}'
+        if algorithm == 'FAISS':
+            fgc_col = 'fgc_time'
+        else:
+            fgc_col = f'fgc_time_{algorithm.lower()}'
+            # Fall back to base fgc_time if algorithm-specific doesn't exist
+            if fgc_col not in filtered_data.columns:
+                fgc_col = 'fgc_time'
+
+        if time_col not in filtered_data.columns or fgc_col not in filtered_data.columns:
             continue
 
         # Calculate speedup
         valid_data = filtered_data[
             (filtered_data[time_col].notna()) &
-            (filtered_data['fgc_time'].notna()) &
+            (filtered_data[fgc_col].notna()) &
             (filtered_data[time_col] > 0) &
-            (filtered_data['fgc_time'] > 0)
+            (filtered_data[fgc_col] > 0)
         ].copy()
 
         if valid_data.empty:
             continue
 
-        speedup = valid_data[time_col] / valid_data['fgc_time']
+        speedup = valid_data[time_col] / valid_data[fgc_col]
 
         # Add trace
         fig.add_trace(
@@ -661,20 +676,24 @@ def main():
         },
     ]
 
-    print("Starting CSV processing...")
+    if PROCESS_CSV_FILES:
+        print("Starting CSV processing...")
 
-    # Process all algorithms using the combined file approach
-    for algo in algorithms_to_process:
-        process_algorithm_data(
-            algorithm_name=algo['name'],
-            algorithm_dir=algo['directory'],
-            output_path=algo['output'],
-            time_column=algo['time_column']
-        )
+        # Process all algorithms using the combined file approach
+        for algo in algorithms_to_process:
+            process_algorithm_data(
+                algorithm_name=algo['name'],
+                algorithm_dir=algo['directory'],
+                output_path=algo['output'],
+                time_column=algo['time_column']
+            )
 
-    print("\nProcessing complete.")
+        print("\nProcessing complete.")
+    else:
+        print("Skipping CSV processing (PROCESS_CSV_FILES = False)")
+        print("Using existing cleaned CSV files for plotting...\n")
 
-    # Create plots after processing all data
+    # Create plots after processing all data (or using existing cleaned files)
     create_plots()
 
 
