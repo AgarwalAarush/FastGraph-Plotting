@@ -48,49 +48,58 @@ ALGORITHMS = {
 MAX_DATASET_SIZE = 5_000_000  # Cap all analyses at 5M data points
 
 
-def combine_scann_files(scann_dir: str) -> pd.DataFrame:
+def combine_algorithm_files(algorithm_dir: str, algorithm_name: str, time_column: str) -> pd.DataFrame:
     """
-    Combine all SCANN CSV files from the scann-data directory.
+    Combine all CSV files from an algorithm's data directory.
 
     Args:
-        scann_dir: Path to the directory containing SCANN CSV files.
+        algorithm_dir: Path to the directory containing algorithm CSV files.
+        algorithm_name: Name of the algorithm (for display purposes).
+        time_column: Name of the time column for this algorithm (e.g., 'scann_time').
 
     Returns:
         Combined DataFrame with standardized columns.
     """
-    if not os.path.exists(scann_dir):
-        print(f"SCANN directory not found: {scann_dir}")
+    if not os.path.exists(algorithm_dir):
+        print(f"{algorithm_name} directory not found: {algorithm_dir}")
         return pd.DataFrame()
 
-    print(f"Combining SCANN files from {scann_dir}...")
+    print(f"Combining {algorithm_name} files from {algorithm_dir}...")
     all_data = []
 
     # Get all CSV files in the directory
-    csv_files = [f for f in os.listdir(scann_dir) if f.endswith('.csv')]
-    print(f"Found {len(csv_files)} SCANN CSV files to process")
+    csv_files = [f for f in os.listdir(algorithm_dir) if f.endswith(
+        '.csv') and not f.startswith('.')]
+    print(f"Found {len(csv_files)} {algorithm_name} CSV files to process")
 
     for filename in csv_files:
-        file_path = os.path.join(scann_dir, filename)
+        file_path = os.path.join(algorithm_dir, filename)
         try:
             df = pd.read_csv(file_path)
             print(f"  Processing {filename}: {len(df)} records")
+
+            # Standardize column names - handle 'dims' -> 'dimension'
+            if 'dims' in df.columns and 'dimension' not in df.columns:
+                df = df.rename(columns={'dims': 'dimension'})
 
             # Standardize columns based on file type
             if 'size' in df.columns and 'fixed_dimension' in df.columns:
                 # Size-varying files: size is variable, fixed_dimension is constant
                 df = df.rename(columns={'fixed_dimension': 'dimension'})
-                df = df[['size', 'k', 'dimension',
-                         'scann_time', 'fgc_time', 'count']]
             elif 'dimension' in df.columns and 'fixed_size' in df.columns:
                 # Dimension-varying files: dimension is variable, fixed_size is constant
                 df = df.rename(columns={'fixed_size': 'size'})
-                df = df[['size', 'k', 'dimension',
-                         'scann_time', 'fgc_time', 'count']]
-            else:
+
+            # Ensure all required columns are present
+            required_cols = ['size', 'k', 'dimension',
+                             time_column, 'fgc_time', 'count']
+            if not all(col in df.columns for col in required_cols):
                 print(
-                    f"  Warning: Unexpected column structure in {filename}, skipping")
+                    f"  Warning: Missing required columns in {filename}, skipping")
                 continue
 
+            # Select only the required columns
+            df = df[required_cols]
             all_data.append(df)
 
         except Exception as e:
@@ -98,85 +107,49 @@ def combine_scann_files(scann_dir: str) -> pd.DataFrame:
             continue
 
     if not all_data:
-        print("No valid SCANN data found!")
+        print(f"No valid {algorithm_name} data found!")
         return pd.DataFrame()
 
     # Combine all data
     combined_df = pd.concat(all_data, ignore_index=True)
-    print(f"Combined SCANN data: {len(combined_df)} total records")
+    print(f"Combined {algorithm_name} data: {len(combined_df)} total records")
 
     return combined_df
 
 
-def process_csv(file_path: str, output_path: str, time_cols: list, key_cols: list):
+def process_algorithm_data(algorithm_name: str, algorithm_dir: str, output_path: str, time_column: str):
     """
-    Loads a CSV, processes duplicates by weighted average, and saves the result.
+    Process algorithm data by combining CSV files and applying weighted averages.
 
     Args:
-        file_path: Path to the input CSV file.
-        output_path: Path to save the cleaned CSV file.
-        time_cols: List of time columns to apply weighted average on.
-        key_cols: List of columns to group by.
-    """
-    if not os.path.exists(file_path):
-        print(f"File not found: {file_path}. Skipping.")
-        return
-
-    print(f"Processing {file_path}...")
-    df = pd.read_csv(file_path)
-
-    if 'dims' in df.columns and 'dimension' not in df.columns:
-        df = df.rename(columns={'dims': 'dimension'})
-        df.to_csv(file_path, index=False)
-        print(f"Renamed 'dims' to 'dimension' in {file_path}")
-
-    # Ensure all necessary columns are present
-    required_cols = key_cols + time_cols + ['count']
-    if not all(col in df.columns for col in required_cols):
-        print(f"Missing required columns in {file_path}. Skipping.")
-        return
-
-    # Define aggregation logic
-    agg_funs = {}
-    for col in time_cols:
-        agg_funs[col] = lambda x: np.average(
-            x, weights=df.loc[x.index, 'count'])
-
-    agg_funs['count'] = 'sum'
-
-    # Group and aggregate
-    df_cleaned = df.groupby(key_cols).agg(agg_funs).reset_index()
-
-    # Save cleaned data
-    df_cleaned.to_csv(output_path, index=False)
-    print(f"Saved cleaned data to {output_path}")
-
-
-def process_scann_data(output_path: str):
-    """
-    Special handler for SCANN data that combines multiple CSV files.
-
-    Args:
+        algorithm_name: Name of the algorithm (for display purposes).
+        algorithm_dir: Path to the directory containing algorithm CSV files.
         output_path: Path to save the cleaned combined CSV file.
+        time_column: Name of the time column for this algorithm (e.g., 'annoy_time').
     """
-    # Combine all SCANN files from the scann-data directory
-    combined_df = combine_scann_files('scann-data')
+    print(f"\nProcessing {algorithm_name} data...")
+
+    # Combine all CSV files from the algorithm directory
+    combined_df = combine_algorithm_files(
+        algorithm_dir, algorithm_name, time_column)
 
     if combined_df.empty:
-        print("No SCANN data to process!")
+        print(f"No {algorithm_name} data to process!")
         return
 
     # Define processing parameters
-    time_cols = ['scann_time', 'fgc_time']
+    time_cols = [time_column, 'fgc_time']
     key_cols = ['size', 'k', 'dimension']
 
     # Ensure all necessary columns are present
     required_cols = key_cols + time_cols + ['count']
     if not all(col in combined_df.columns for col in required_cols):
-        print(f"Missing required columns in combined SCANN data. Skipping.")
+        print(
+            f"Missing required columns in combined {algorithm_name} data. Skipping.")
         return
 
-    print(f"Processing combined SCANN data: {len(combined_df)} records")
+    print(
+        f"Processing combined {algorithm_name} data: {len(combined_df)} records")
 
     # Define aggregation logic for weighted averages
     agg_funs = {}
@@ -191,7 +164,7 @@ def process_scann_data(output_path: str):
 
     # Save cleaned data
     df_cleaned.to_csv(output_path, index=False)
-    print(f"Saved cleaned SCANN data to {output_path}")
+    print(f"Saved cleaned {algorithm_name} data to {output_path}")
 
 
 def load_and_prepare_data() -> pd.DataFrame:
@@ -295,6 +268,17 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
             (data['size'] <= MAX_DATASET_SIZE)
         ].copy().sort_values('size')
 
+        # Filter to only show specific sizes: 0, 100k, 500k, 1M, then every 500k
+        allowed_sizes = [0, 100_000, 500_000, 1_000_000]
+        # Add every 500k after 1M up to MAX_DATASET_SIZE
+        current_size = 1_500_000
+        while current_size <= MAX_DATASET_SIZE:
+            allowed_sizes.append(current_size)
+            current_size += 500_000
+
+        filtered_data = filtered_data[filtered_data['size'].isin(
+            allowed_sizes)].copy()
+
         x_col = 'size'
         x_title = "Dataset Size"
         x_range = [0, 5_000_000]
@@ -367,11 +351,20 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
     )
 
     if analysis_type == 'sizes':
+        # Set tick marks to match filtered data points: 0, 100k, 500k, 1M, then every 500k
+        tick_vals = [0, 100_000, 500_000, 1_000_000]
+        tick_texts = ['0', '100k', '500k', '1M']
+        current_size = 1_500_000
+        while current_size <= MAX_DATASET_SIZE:
+            tick_vals.append(current_size)
+            tick_texts.append(f'{current_size//1_000_000}M' if current_size %
+                              1_000_000 == 0 else f'{current_size//1_000_000}.5M')
+            current_size += 500_000
+
         fig.update_xaxes(
             tickmode='array',
-            tickvals=[0, 1_000_000, 2_000_000,
-                      3_000_000, 4_000_000, 5_000_000],
-            ticktext=['0', '1M', '2M', '3M', '4M', '5M']
+            tickvals=tick_vals,
+            ticktext=tick_texts
         )
 
     y_axis_config = {
@@ -477,12 +470,21 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
                      range=[0, y_axis_cap], row=1, col=2)
 
     if analysis_type == 'sizes':
+        # Set tick marks to match filtered data points: 0, 100k, 500k, 1M, then every 500k
+        tick_vals = [0, 100_000, 500_000, 1_000_000]
+        tick_texts = ['0', '100k', '500k', '1M']
+        current_size = 1_500_000
+        while current_size <= MAX_DATASET_SIZE:
+            tick_vals.append(current_size)
+            tick_texts.append(f'{current_size//1_000_000}M' if current_size %
+                              1_000_000 == 0 else f'{current_size//1_000_000}.5M')
+            current_size += 500_000
+
         for col in [1, 2]:
             fig.update_xaxes(
                 tickmode='array',
-                tickvals=[0, 1_000_000, 2_000_000,
-                          3_000_000, 4_000_000, 5_000_000],
-                ticktext=['0', '1M', '2M', '3M', '4M', '5M'],
+                tickvals=tick_vals,
+                ticktext=tick_texts,
                 row=1, col=col
             )
 
@@ -631,39 +633,46 @@ def main():
     algorithms_to_process = [
         {
             'name': 'GGNN',
-            'file': 'ggnn_data.csv',
-            'time_cols': ['ggnn_time', 'fgc_time'],
+            'directory': 'ggnn-data',
+            'time_column': 'ggnn_time',
+            'output': 'ggnn_data_cleaned.csv'
         },
         {
             'name': 'Annoy',
-            'file': 'annoy_data.csv',
-            'time_cols': ['annoy_time', 'fgc_time'],
+            'directory': 'annoy-data',
+            'time_column': 'annoy_time',
+            'output': 'annoy_data_cleaned.csv'
         },
         {
             'name': 'FAISS',
-            'file': 'faiss_data.csv',
-            'time_cols': ['faiss_time', 'fgc_time'],
+            'directory': 'faiss-data',
+            'time_column': 'faiss_time',
+            'output': 'faiss_data_cleaned.csv'
         },
         {
             'name': 'HNSWLIB',
-            'file': 'hnswlib_data.csv',
-            'time_cols': ['hnswlib_time', 'fgc_time'],
+            'directory': 'hnswlib-data',
+            'time_column': 'hnswlib_time',
+            'output': 'hnswlib_data_cleaned.csv'
+        },
+        {
+            'name': 'SCANN',
+            'directory': 'scann-data',
+            'time_column': 'scann_time',
+            'output': 'scann_data_cleaned.csv'
         },
     ]
 
-    key_columns = ['size', 'k', 'dimension']
-
     print("Starting CSV processing...")
 
-    # Process regular algorithms
+    # Process all algorithms using the combined file approach
     for algo in algorithms_to_process:
-        file_path = algo['file']
-        output_file = file_path.replace('.csv', '_cleaned.csv')
-        process_csv(file_path, output_file, algo['time_cols'], key_columns)
-
-    # Process SCANN data specially (combines multiple files)
-    print("\nProcessing SCANN data...")
-    process_scann_data('scann_data_cleaned.csv')
+        process_algorithm_data(
+            algorithm_name=algo['name'],
+            algorithm_dir=algo['directory'],
+            output_path=algo['output'],
+            time_column=algo['time_column']
+        )
 
     print("\nProcessing complete.")
 
