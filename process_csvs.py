@@ -596,7 +596,7 @@ def create_plots():
     # 1. d3: K=40, size iterate (side-by-side with zoom)
     print("\n1. Creating FGC speedup analysis: D=3, K=40, varying sizes (with zoom)...")
     fig1 = plot_side_by_side_with_zoom(
-        data, 'sizes', dimension=3, k=40, y_axis_cap=100)
+        data, 'sizes', dimension=3, k=40, y_axis_cap=50)
     save_figure(fig1, 'plots/fgc_speedup_d3_all_algorithms.png', 1400, 600)
 
     # 2. d5: K=40, size iterate (side-by-side with zoom)
