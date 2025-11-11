@@ -351,15 +351,14 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
     )
 
     if analysis_type == 'sizes':
-        # Set tick marks to match filtered data points: 0, 100k, 500k, 1M, then every 500k
-        tick_vals = [0, 100_000, 500_000, 1_000_000]
-        tick_texts = ['0', '100k', '500k', '1M']
-        current_size = 1_500_000
+        # Set tick marks to show only every 1M: 0, 1M, 2M, 3M, 4M, 5M
+        tick_vals = [0]
+        tick_texts = ['0']
+        current_size = 1_000_000
         while current_size <= MAX_DATASET_SIZE:
             tick_vals.append(current_size)
-            tick_texts.append(f'{current_size//1_000_000}M' if current_size %
-                              1_000_000 == 0 else f'{current_size//1_000_000}.5M')
-            current_size += 500_000
+            tick_texts.append(f'{current_size//1_000_000}M')
+            current_size += 1_000_000
 
         fig.update_xaxes(
             tickmode='array',
@@ -470,15 +469,14 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
                      range=[0, y_axis_cap], row=1, col=2)
 
     if analysis_type == 'sizes':
-        # Set tick marks to match filtered data points: 0, 100k, 500k, 1M, then every 500k
-        tick_vals = [0, 100_000, 500_000, 1_000_000]
-        tick_texts = ['0', '100k', '500k', '1M']
-        current_size = 1_500_000
+        # Set tick marks to show only every 1M: 0, 1M, 2M, 3M, 4M, 5M
+        tick_vals = [0]
+        tick_texts = ['0']
+        current_size = 1_000_000
         while current_size <= MAX_DATASET_SIZE:
             tick_vals.append(current_size)
-            tick_texts.append(f'{current_size//1_000_000}M' if current_size %
-                              1_000_000 == 0 else f'{current_size//1_000_000}.5M')
-            current_size += 500_000
+            tick_texts.append(f'{current_size//1_000_000}M')
+            current_size += 1_000_000
 
         for col in [1, 2]:
             fig.update_xaxes(
