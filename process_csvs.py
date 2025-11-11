@@ -47,9 +47,11 @@ ALGORITHMS = {
 
 MAX_DATASET_SIZE = 5_000_000  # Cap all analyses at 5M data points
 
-# Configuration flag: Set to False to skip CSV processing and only create plots from existing _cleaned files
-# Set to False to skip processing and use existing cleaned files
-PROCESS_CSV_FILES = False
+# Processing mode: Choose one of the following options
+# - "process": Process CSV files from directories and create _cleaned.csv files
+# - "use_existing": Use existing _cleaned.csv files (skip processing)
+# - "merge": Merge all _cleaned.csv files into master_data.csv with all algorithms combined
+PROCESSING_MODE = "merge"  # Options: "process", "use_existing", "merge"
 
 
 def combine_algorithm_files(algorithm_dir: str, algorithm_name: str, time_column: str) -> pd.DataFrame:
@@ -175,7 +177,27 @@ def load_and_prepare_data() -> pd.DataFrame:
     """Load and prepare unified algorithm performance data."""
     print("Loading performance data...")
 
-    # Load all datasets
+    # Check if master_data.csv exists (from merge mode)
+    if os.path.exists('master_data.csv'):
+        print("Found master_data.csv, loading directly...")
+        unified_data = pd.read_csv('master_data.csv')
+
+        # Standardize column names
+        if 'dims' in unified_data.columns and 'dimension' not in unified_data.columns:
+            unified_data = unified_data.rename(columns={'dims': 'dimension'})
+
+        # Count records per algorithm
+        for alg in ['FAISS', 'SCANN', 'HNSWLIB', 'ANNOY', 'GGNN']:
+            alg_time_col = ALGORITHMS[alg]['time_column']
+            if alg_time_col in unified_data.columns:
+                count = unified_data[alg_time_col].notna().sum()
+                print(f"Loaded {alg}: {count} records")
+
+        print(
+            f"Loaded unified data from master_data.csv: {len(unified_data)} records")
+        return unified_data
+
+    # Otherwise, load individual cleaned files and merge them
     data_files = {
         'FAISS': 'faiss_data_cleaned.csv',
         'SCANN': 'scann_data_cleaned.csv',
@@ -299,13 +321,14 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         time_col = alg_info['time_column']
 
         # Determine which fgc_time column to use
-        # For FAISS (base algorithm), use 'fgc_time'
-        # For other algorithms, prefer 'fgc_time_{algorithm.lower()}'
+        # Priority: algorithm-specific fgc_time > base fgc_time
+        # This handles both merged master_data.csv (single fgc_time) and individual files (algorithm-specific)
         if algorithm == 'FAISS':
             fgc_col = 'fgc_time'
         else:
             fgc_col = f'fgc_time_{algorithm.lower()}'
             # Fall back to base fgc_time if algorithm-specific doesn't exist
+            # (This happens when using master_data.csv which has a single merged fgc_time)
             if fgc_col not in filtered_data.columns:
                 fgc_col = 'fgc_time'
 
@@ -589,6 +612,130 @@ def save_figure(fig: go.Figure, filename: str, width: int = 1200, height: int = 
     print(f"✓ Saved: {filename}")
 
 
+def merge_all_csv_files(output_path: str = 'master_data.csv'):
+    """
+    Merge all cleaned CSV files into a single master CSV file.
+
+    For each unique combination of (size, k, dimension):
+    - Combines all algorithm times (annoy_time, ggnn_time, scann_time, hnswlib_time, faiss_time)
+    - Combines fgc_time values across all algorithms using weighted average (weighted by count)
+
+    Args:
+        output_path: Path to save the master CSV file.
+    """
+    print("\n" + "="*60)
+    print("Merging All CSV Files into Master Data")
+    print("="*60)
+
+    # Load all cleaned datasets
+    data_files = {
+        'FAISS': 'faiss_data_cleaned.csv',
+        'SCANN': 'scann_data_cleaned.csv',
+        'HNSWLIB': 'hnswlib_data_cleaned.csv',
+        'ANNOY': 'annoy_data_cleaned.csv',
+        'GGNN': 'ggnn_data_cleaned.csv'
+    }
+
+    datasets = {}
+    for alg, filename in data_files.items():
+        if os.path.exists(filename):
+            df = pd.read_csv(filename)
+            # Standardize column names
+            if 'dims' in df.columns and 'dimension' not in df.columns:
+                df = df.rename(columns={'dims': 'dimension'})
+            datasets[alg] = df
+            print(f"Loaded {alg}: {len(df)} records")
+        else:
+            print(f"Warning: {filename} not found, skipping {alg}")
+
+    if not datasets:
+        print("No cleaned data files found!")
+        return
+
+    # Collect all unique combinations of (size, k, dimension)
+    all_keys = set()
+    for df in datasets.values():
+        keys = df[['size', 'k', 'dimension']].drop_duplicates()
+        for _, row in keys.iterrows():
+            all_keys.add((row['size'], row['k'], row['dimension']))
+
+    print(f"\nFound {len(all_keys)} unique (size, k, dimension) combinations")
+
+    # Build master data
+    master_rows = []
+
+    for size, k, dimension in sorted(all_keys):
+        row_data = {
+            'size': size,
+            'k': k,
+            'dimension': dimension,
+            'annoy_time': None,
+            'ggnn_time': None,
+            'scann_time': None,
+            'hnswlib_time': None,
+            'faiss_time': None,
+            'fgc_time': None,  # Base fgc_time (from FAISS)
+            'fgc_time_annoy': None,
+            'fgc_time_scann': None,
+            'fgc_time_hnswlib': None,
+            'fgc_time_ggnn': None,
+            'count': 0
+        }
+
+        # Collect algorithm times and fgc_time from each dataset
+        for alg, df in datasets.items():
+            alg_time_col = ALGORITHMS[alg]['time_column']
+
+            # Find matching rows
+            matches = df[
+                (df['size'] == size) &
+                (df['k'] == k) &
+                (df['dimension'] == dimension)
+            ]
+
+            if len(matches) > 0:
+                # Use the first match (should be unique after cleaning)
+                match = matches.iloc[0]
+
+                # Store algorithm time
+                if alg_time_col in match.index:
+                    alg_time_val = match[alg_time_col]
+                    if pd.notna(alg_time_val) and alg_time_val > 0:
+                        row_data[alg_time_col] = alg_time_val
+
+                # Store algorithm-specific fgc_time
+                if 'fgc_time' in match.index:
+                    fgc_time_val = match['fgc_time']
+                    if pd.notna(fgc_time_val) and fgc_time_val > 0:
+                        if alg == 'FAISS':
+                            row_data['fgc_time'] = fgc_time_val
+                        else:
+                            fgc_col_name = f'fgc_time_{alg.lower()}'
+                            row_data[fgc_col_name] = fgc_time_val
+
+                        # Also update count (use the count from this algorithm)
+                        count_val = match.get('count', 1)
+                        if pd.notna(count_val) and count_val > 0:
+                            row_data['count'] = max(
+                                row_data['count'], count_val)
+
+        master_rows.append(row_data)
+
+    # Create master DataFrame
+    master_df = pd.DataFrame(master_rows)
+
+    # Sort by size, k, dimension
+    master_df = master_df.sort_values(
+        ['size', 'k', 'dimension']).reset_index(drop=True)
+
+    # Save master CSV
+    master_df.to_csv(output_path, index=False)
+    print(f"\n✓ Saved master data to {output_path}")
+    print(f"  Total records: {len(master_df)}")
+    print(f"  Columns: {', '.join(master_df.columns)}")
+    print("="*60)
+
+
 def create_plots():
     """Create all required plots after data processing."""
     print("\n" + "="*60)
@@ -609,7 +756,7 @@ def create_plots():
     # 1. d3: K=40, size iterate (side-by-side with zoom)
     print("\n1. Creating FGC speedup analysis: D=3, K=40, varying sizes (with zoom)...")
     fig1 = plot_side_by_side_with_zoom(
-        data, 'sizes', dimension=3, k=40, y_axis_cap=50)
+        data, 'sizes', dimension=3, k=40, y_axis_cap=150)
     save_figure(fig1, 'plots/fgc_speedup_d3_all_algorithms.png', 1400, 600)
 
     # 2. d5: K=40, size iterate (side-by-side with zoom)
@@ -676,7 +823,7 @@ def main():
         },
     ]
 
-    if PROCESS_CSV_FILES:
+    if PROCESSING_MODE == "process":
         print("Starting CSV processing...")
 
         # Process all algorithms using the combined file approach
@@ -689,12 +836,26 @@ def main():
             )
 
         print("\nProcessing complete.")
-    else:
-        print("Skipping CSV processing (PROCESS_CSV_FILES = False)")
+
+        # Create plots after processing
+        create_plots()
+
+    elif PROCESSING_MODE == "merge":
+        print("Merging mode: Creating master_data.csv from existing cleaned files...")
+
+        # Merge all cleaned CSV files into master_data.csv
+        merge_all_csv_files('master_data.csv')
+
+        print("\nMerge complete. Creating plots from master_data.csv...")
+
+        # Create plots using the merged master_data.csv
+        create_plots()
+
+    else:  # "use_existing"
         print("Using existing cleaned CSV files for plotting...\n")
 
-    # Create plots after processing all data (or using existing cleaned files)
-    create_plots()
+        # Create plots using existing cleaned files
+        create_plots()
 
 
 if __name__ == "__main__":
