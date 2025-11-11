@@ -486,7 +486,7 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
                 row=1, col=col
             )
 
-    # Update main layout
+    # Update main layout - position legend on rightmost subplot (col=2)
     fig.update_layout(
         title_text=main_title,
         height=600,
@@ -494,16 +494,16 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
         template='plotly_white',
         font=dict(family="Arial", size=12),
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.2,
-            xanchor="center",
-            x=0.5,
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
             bgcolor="rgba(255,255,255,0.8)",
             bordercolor="lightgray",
             borderwidth=1
         ),
-        margin=dict(t=80, b=120, l=80, r=80)
+        margin=dict(t=80, b=60, l=80, r=80)
     )
 
     return fig
@@ -546,7 +546,7 @@ def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
             row=1, col=i
         )
 
-    # Update main layout
+    # Update main layout - position legend on rightmost subplot (col=3)
     fig.update_layout(
         title_text="FGC Dimensional Scaling Analysis: K Comparison (1M Vectors, d=2-10)",
         height=600,
@@ -554,16 +554,16 @@ def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
         template='plotly_white',
         font=dict(family="Arial", size=12),
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.2,
-            xanchor="center",
-            x=0.5,
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
             bgcolor="rgba(255,255,255,0.8)",
             bordercolor="lightgray",
             borderwidth=1
         ),
-        margin=dict(t=80, b=120, l=80, r=80)
+        margin=dict(t=80, b=60, l=80, r=80)
     )
     return fig
 
@@ -600,7 +600,7 @@ def create_plots():
     # 2. d5: K=40, size iterate (side-by-side with zoom)
     print("\n2. Creating FGC speedup analysis: D=5, K=40, varying sizes (with zoom)...")
     fig2 = plot_side_by_side_with_zoom(
-        data, 'sizes', dimension=5, k=40, y_axis_cap=100)
+        data, 'sizes', dimension=5, k=40, y_axis_cap=50)
     save_figure(fig2, 'plots/fgc_speedup_d5_all_algorithms.png', 1400, 600)
 
     # 3. k comparison: 10, 40, 100 @ dimension iteration, 1M size
