@@ -556,6 +556,86 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
     return fig
 
 
+def plot_d3_d5_comparison(data: pd.DataFrame, k: int = 40) -> go.Figure:
+    """Create side-by-side plot comparing D=3 and D=5 size iteration analysis."""
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("D=3", "D=5"),
+        horizontal_spacing=0.08
+    )
+    # Update subplot title font size
+    for annotation in fig['layout']['annotations']:
+        annotation['font'] = dict(size=16)
+
+    # Generate plots for d=3 and d=5
+    fig_d3 = plot_fgc_speedup_analysis(
+        data, 'sizes', dimension=3, k=k, custom_title=" ")
+
+    fig_d5 = plot_fgc_speedup_analysis(
+        data, 'sizes', dimension=5, k=k, custom_title=" ")
+
+    # Add traces from d=3 plot to first subplot (no legend to avoid duplicates)
+    for trace in fig_d3.data:
+        trace.showlegend = False
+        fig.add_trace(trace, row=1, col=1)
+
+    # Add traces from d=5 plot to second subplot (show legend on rightmost subplot)
+    for trace in fig_d5.data:
+        fig.add_trace(trace, row=1, col=2)
+
+    # Update axes
+    x_title = "Dataset Size"
+
+    # Set tick marks to show only every 1M: 0, 1M, 2M, 3M, 4M, 5M
+    tick_vals = [0]
+    tick_texts = ['0']
+    current_size = 1_000_000
+    while current_size <= MAX_DATASET_SIZE:
+        tick_vals.append(current_size)
+        tick_texts.append(f'{current_size//1_000_000}M')
+        current_size += 1_000_000
+
+    for col in [1, 2]:
+        fig.update_xaxes(
+            title_text=x_title,
+            title_font_size=18,
+            tickfont=dict(size=16),
+            tickmode='array',
+            tickvals=tick_vals,
+            ticktext=tick_texts,
+            row=1, col=col
+        )
+        fig.update_yaxes(
+            title_text="FGC Speedup Factor" if col == 1 else "",
+            title_font_size=18 if col == 1 else None,
+            tickfont=dict(size=16),
+            row=1, col=col
+        )
+
+    # Update main layout - position legend on rightmost subplot (col=2)
+    fig.update_layout(
+        title_text=f"FGC Speedup Analysis: D=3 vs D=5 Comparison (K={k}, Varying Sizes)",
+        title_font_size=21,
+        height=600,
+        width=1400,
+        template='plotly_white',
+        font=dict(family="Arial", size=16),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1
+        ),
+        margin=dict(t=80, b=60, l=80, r=80)
+    )
+
+    return fig
+
+
 def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
     """Create three-panel side-by-side plot for dimensional analysis at 1M points."""
     fig = make_subplots(
@@ -795,12 +875,19 @@ def create_plots():
     save_figure(
         fig4, 'plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png', 1400, 600)
 
+    # 5. d3 vs d5 comparison: K=40, size iteration (side-by-side)
+    print("\n5. Creating D=3 vs D=5 comparison: K=40, varying sizes...")
+    fig5 = plot_d3_d5_comparison(data, k=40)
+    save_figure(
+        fig5, 'plots/fgc_speedup_d3_vs_d5_k40_all_algorithms.png', 1400, 600)
+
     print(f"\n" + "="*60)
     print("Plot Generation Complete! Generated files:")
     print("• plots/fgc_speedup_d3_all_algorithms.png (side-by-side with zoom)")
     print("• plots/fgc_speedup_d5_all_algorithms.png (side-by-side with zoom)")
     print("• plots/fgc_k_comparison_1M_d2-10_all_algorithms.png")
     print("• plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png (side-by-side with zoom)")
+    print("• plots/fgc_speedup_d3_vs_d5_k40_all_algorithms.png (side-by-side comparison)")
     print("="*60)
 
 
