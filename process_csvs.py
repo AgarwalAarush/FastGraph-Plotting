@@ -260,6 +260,7 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
 
     y_axis_cap = kwargs.get('y_axis_cap', None)
     custom_title = kwargs.get('custom_title', None)
+    log_y = kwargs.get('log_y', False)
 
     if analysis_type == 'dimensions':
         size = kwargs.get('size', 1_000_000)
@@ -412,7 +413,21 @@ def plot_fgc_speedup_analysis(data: pd.DataFrame, analysis_type: str, **kwargs) 
         'tickfont': dict(size=16)
     }
     if y_axis_cap:
-        y_axis_config['range'] = [0, y_axis_cap]
+        if log_y:
+            # Start at 1 (log10(1)=0) to avoid markers between 0 and 1
+            y_axis_config['range'] = [0, np.log10(y_axis_cap)]
+        else:
+            y_axis_config['range'] = [0, y_axis_cap]
+
+    if log_y:
+        y_axis_config['type'] = 'log'
+        y_axis_config['dtick'] = 1  # Major ticks every power of 10
+        # Disable minor ticks/grid to ensure visually uniform spacing
+        y_axis_config['minor'] = dict(
+            showgrid=False,
+            ticklen=0
+        )
+        y_axis_config['tickformat'] = '.0f'  # Display as 1, 10, 100
 
     fig.update_yaxes(**y_axis_config)
 
@@ -881,6 +896,12 @@ def create_plots():
     save_figure(
         fig5, 'plots/fgc_speedup_d3_vs_d5_k40_all_algorithms.png', 1400, 600)
 
+    # 6. d3, k=40 with logarithmic y-axis
+    print("\n6. Creating FGC speedup analysis: D=3, K=40, varying sizes (logarithmic y-axis)...")
+    fig6 = plot_fgc_speedup_analysis(
+        data, 'sizes', dimension=3, k=40, custom_title="FastGraph Speedup at K=40, D=3", log_y=True)
+    save_figure(fig6, 'plots/fgc_speedup_d3_k40_log_y.png', 1200, 500)
+
     print(f"\n" + "="*60)
     print("Plot Generation Complete! Generated files:")
     print("• plots/fgc_speedup_d3_all_algorithms.png (side-by-side with zoom)")
@@ -888,6 +909,7 @@ def create_plots():
     print("• plots/fgc_k_comparison_1M_d2-10_all_algorithms.png")
     print("• plots/fgc_dimensional_scaling_1M_k40_all_algorithms.png (side-by-side with zoom)")
     print("• plots/fgc_speedup_d3_vs_d5_k40_all_algorithms.png (side-by-side comparison)")
+    print("• plots/fgc_speedup_d3_k40_log_y.png (logarithmic y-axis)")
     print("="*60)
 
 
