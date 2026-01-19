@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import os
 import time
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -21,6 +22,16 @@ SEED = 42
 RUNS_FILE = "gpu-runs.txt"
 OUTPUT_CSV = "gpu_performance.csv"
 
+# Data paths (match vector-analysis.ipynb/data-analysis.py)
+DATA_DIR = os.environ.get("CLIC_DATA_DIR", "/workspace/data")
+HDF5_PATH = os.environ.get("CLIC_HDF5_PATH", os.path.join(DATA_DIR, "clic_test_particles.h5"))
+HDF5_DATASET = os.environ.get("CLIC_HDF5_DATASET", "particles")
+ARRAY_RECORD_GLOB = os.environ.get(
+    "CLIC_ARRAY_RECORD_GLOB", "clic_edm_qq_pf-test.array_record-*"
+)
+FEATURE_KEY = os.environ.get("CLIC_FEATURE_KEY", "X")
+FEATURE_WIDTH = int(os.environ.get("CLIC_FEATURE_WIDTH", "17"))
+
 # GGNN parameters (mirroring generate_ggnn_performance.py defaults)
 K_BUILD = 24
 TAU_BUILD = 0.5
@@ -28,9 +39,107 @@ TAU_QUERY = 0.64
 MAX_ITERATIONS = 400
 
 
-def generate_data(n_points: int, dimensions: int, seed_offset: int = 0) -> np.ndarray:
-    np.random.seed(SEED + seed_offset)
-    return np.random.randn(n_points, dimensions).astype(np.float32)
+def _empty_data(dimensions: int) -> np.ndarray:
+    return np.empty((0, dimensions), dtype=np.float32)
+
+
+def _sample_from_hdf5(
+    path: str, points: int, dimensions: int, seed_offset: int = 0
+) -> np.ndarray:
+    try:
+        import h5py
+    except ImportError as exc:
+        raise ImportError("h5py is required to load HDF5 data") from exc
+
+    if points == 0:
+        return _empty_data(dimensions)
+
+    with h5py.File(path, "r") as f:
+        if HDF5_DATASET not in f:
+            raise KeyError(f"Dataset '{HDF5_DATASET}' not found in {path}")
+        dataset = f[HDF5_DATASET]
+        total_points, total_dim = dataset.shape
+        if dimensions > total_dim:
+            raise ValueError(
+                f"Requested dim={dimensions} exceeds dataset dim={total_dim}"
+            )
+        rng = np.random.default_rng(SEED + seed_offset)
+        if points >= total_points:
+            if points > total_points:
+                print(
+                    f"Requested {points} points, using all {total_points} available."
+                )
+            data = dataset[:, :dimensions]
+        else:
+            indices = rng.choice(total_points, size=points, replace=False)
+            data = dataset[indices, :dimensions]
+    return np.asarray(data, dtype=np.float32)
+
+
+def _sample_from_array_record(
+    data_dir: str, points: int, dimensions: int, seed_offset: int = 0
+) -> np.ndarray:
+    try:
+        import tensorflow as tf
+        from array_record.python.array_record_data_source import ArrayRecordDataSource
+    except ImportError as exc:
+        raise ImportError(
+            "tensorflow and array_record are required to load ArrayRecord data"
+        ) from exc
+
+    if points == 0:
+        return _empty_data(dimensions)
+
+    shard_paths = sorted(Path(data_dir).glob(ARRAY_RECORD_GLOB))
+    if not shard_paths:
+        raise FileNotFoundError(
+            f"No ArrayRecord shards found in {data_dir} with glob {ARRAY_RECORD_GLOB}"
+        )
+
+    rng = np.random.default_rng(SEED + seed_offset)
+    sample = np.empty((points, dimensions), dtype=np.float32)
+    filled = 0
+    seen = 0
+
+    for shard_path in shard_paths:
+        with ArrayRecordDataSource(str(shard_path)) as ds:
+            for i in range(len(ds)):
+                raw_bytes = ds[i]
+                example = tf.train.Example()
+                example.ParseFromString(raw_bytes)
+                values = example.features.feature[FEATURE_KEY].float_list.value
+                if not values:
+                    continue
+                x = np.asarray(values, dtype=np.float32)
+                if x.size % FEATURE_WIDTH != 0:
+                    raise ValueError(
+                        f"Feature '{FEATURE_KEY}' size {x.size} is not divisible by {FEATURE_WIDTH}"
+                    )
+                x = x.reshape(-1, FEATURE_WIDTH)[:, :dimensions]
+                for row in x:
+                    seen += 1
+                    if filled < points:
+                        sample[filled] = row
+                        filled += 1
+                    else:
+                        j = rng.integers(0, seen)
+                        if j < points:
+                            sample[j] = row
+
+    if filled < points:
+        print(f"Only collected {filled} points from ArrayRecord data.")
+        return sample[:filled]
+    return sample
+
+
+def load_data(n_points: int, dimensions: int, seed_offset: int = 0) -> np.ndarray:
+    if n_points == 0:
+        return _empty_data(dimensions)
+    if os.path.exists(HDF5_PATH):
+        print(f"Loading HDF5 data from {HDF5_PATH}")
+        return _sample_from_hdf5(HDF5_PATH, n_points, dimensions, seed_offset)
+    print(f"Loading ArrayRecord data from {DATA_DIR}")
+    return _sample_from_array_record(DATA_DIR, n_points, dimensions, seed_offset)
 
 
 def ms_since(start: float) -> float:
@@ -96,6 +205,29 @@ def time_fgc_gpu(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
         return None, "error"
 
 
+def time_cuvs_cagra_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]:
+    if data.shape[0] == 0:
+        return 0.0, "empty"
+    try:
+        import cupy as cp
+        from cuvs.neighbors import cagra
+    except ImportError:
+        return None, "not_installed"
+
+    try:
+        start = time.perf_counter()
+        dataset = cp.asarray(data)
+        build_params = cagra.IndexParams(metric="sqeuclidean")
+        index = cagra.build(build_params, dataset)
+        search_params = cagra.SearchParams()
+        cagra.search(search_params, index, dataset, k)
+        cp.cuda.Stream.null.synchronize()
+        return ms_since(start), "ok"
+    except Exception as exc:
+        print(f"CAGRA error: {exc}")
+        return None, "error"
+
+
 def parse_run_line(line: str) -> Tuple[int, int, int]:
     parts = [part.strip() for part in line.split(",")]
     if len(parts) != 3:
@@ -158,13 +290,14 @@ def main() -> None:
         return
 
     print(f"Running GPU benchmarks: dim={dim}, points={points}, k={k}")
-    data_np = generate_data(points, dim)
+    data_np = load_data(points, dim)
     data_gpu = torch.tensor(data_np, dtype=torch.float32, device="cuda")
 
     results: Dict[str, Tuple[Optional[float], str]] = {
         "faiss_gpu": time_faiss_gpu(data_np, k),
         "ggnn": time_ggnn(data_gpu, k),
         "fgc_gpu": time_fgc_gpu(data_gpu, k),
+        "cuvs_cagra": time_cuvs_cagra_gpu(data_np, k),
     }
 
     append_results(output_path, dim, points, k, results)
