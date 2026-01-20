@@ -120,6 +120,7 @@ def time_ggnn(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
     except ImportError:
         return None, "not_installed"
 
+    my_ggnn = None
     try:
         ggnn.set_log_level(1)
         start = time.perf_counter()
@@ -137,6 +138,9 @@ def time_ggnn(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
     except Exception as exc:
         print(f"GGNN error: {exc}")
         return None, "error"
+    finally:
+        if my_ggnn is not None:
+            del my_ggnn
 
 
 def parse_run_line(line: str) -> Tuple[int, int, int]:
@@ -208,6 +212,8 @@ def main() -> None:
         append_result(output_path, dim, points, k, time_ms, status)
         delete_run_line(runs_path, line_index)
         print(f"Wrote results to {output_path} and removed run line.")
+        del data_gpu
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

@@ -115,6 +115,8 @@ def time_cuvs_cagra_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]
     except ImportError:
         return None, "not_installed"
 
+    dataset = None
+    index = None
     try:
         start = time.perf_counter()
         dataset = cp.asarray(data)
@@ -127,6 +129,13 @@ def time_cuvs_cagra_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]
     except Exception as exc:
         print(f"CAGRA error: {exc}")
         return None, "error"
+    finally:
+        if index is not None:
+            del index
+        if dataset is not None:
+            del dataset
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
 
 
 def parse_run_line(line: str) -> Tuple[int, int, int]:

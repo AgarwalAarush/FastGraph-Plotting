@@ -191,6 +191,8 @@ def main() -> None:
         append_result(output_path, dim, points, k, time_ms, status)
         delete_run_line(runs_path, line_index)
         print(f"Wrote results to {output_path} and removed run line.")
+        del data_gpu
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

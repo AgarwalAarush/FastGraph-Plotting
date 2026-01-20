@@ -114,6 +114,8 @@ def time_faiss_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]:
     except ImportError:
         return None, "not_installed"
 
+    index = None
+    res = None
     try:
         start = time.perf_counter()
         index = faiss.IndexFlatL2(data.shape[1])
@@ -125,6 +127,11 @@ def time_faiss_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]:
     except Exception as exc:
         print(f"FAISS error: {exc}")
         return None, "error"
+    finally:
+        if index is not None:
+            del index
+        if res is not None:
+            del res
 
 
 def parse_run_line(line: str) -> Tuple[int, int, int]:
