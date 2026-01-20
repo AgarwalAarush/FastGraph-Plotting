@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-GPU benchmarking runner for FAISS (GPU), GGNN, and FGC (GPU).
-Consumes the first line of gpu-runs.txt (CSV: dim,points,k) and appends results
-to gpu_performance.csv (one line per method), then removes the processed run.
+GPU benchmarking runner for GGNN.
+Consumes the first line of gpu-runs-ggnn.txt (CSV: dim,points,k) and appends results
+to gpu_ggnn_performance.csv (one line per run), then removes the processed run.
 """
 
 import csv
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 
-
 SEED = 42
-RUNS_FILE = "gpu-runs.txt"
-OUTPUT_CSV = "gpu_performance.csv"
+RUNS_FILE = "gpu-runs-ggnn.txt"
+OUTPUT_CSV = "gpu_ggnn_performance.csv"
 
 # Data paths (match vector-analysis.ipynb/data-analysis.py)
 DATA_DIR = os.environ.get("CLIC_DATA_DIR", "/workspace/data")
@@ -93,7 +92,7 @@ def _load_all_from_array_record(data_dir: str, dimensions: int) -> np.ndarray:
     return all_particles[:particle_idx]
 
 
-def load_data(n_points: int, dimensions: int, seed_offset: int = 0) -> np.ndarray:
+def load_data(n_points: int, dimensions: int) -> np.ndarray:
     global _FULL_DATA_CACHE
     if n_points == 0:
         return _empty_data(dimensions)
@@ -113,27 +112,6 @@ def ms_since(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
 
 
-def time_faiss_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]:
-    if data.shape[0] == 0:
-        return 0.0, "empty"
-    try:
-        import faiss
-    except ImportError:
-        return None, "not_installed"
-
-    try:
-        start = time.perf_counter()
-        index = faiss.IndexFlatL2(data.shape[1])
-        res = faiss.StandardGpuResources()
-        index = faiss.index_cpu_to_gpu(res, 0, index)
-        index.add(data)
-        index.search(data, k)
-        return ms_since(start), "ok"
-    except Exception as exc:
-        print(f"FAISS error: {exc}")
-        return None, "error"
-
-
 def time_ggnn(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
     if data_gpu.shape[0] == 0:
         return 0.0, "empty"
@@ -148,37 +126,16 @@ def time_ggnn(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
         my_ggnn = ggnn.GGNN()
         my_ggnn.set_base(data_gpu)
         my_ggnn.set_return_results_on_gpu(True)
-        my_ggnn.build(k_build=K_BUILD, tau_build=TAU_BUILD,
-                      measure=ggnn.DistanceMeasure.Euclidean)
-        my_ggnn.query(data_gpu, k, TAU_QUERY, MAX_ITERATIONS,
-                      ggnn.DistanceMeasure.Euclidean)
+        my_ggnn.build(
+            k_build=K_BUILD, tau_build=TAU_BUILD, measure=ggnn.DistanceMeasure.Euclidean
+        )
+        my_ggnn.query(
+            data_gpu, k, TAU_QUERY, MAX_ITERATIONS, ggnn.DistanceMeasure.Euclidean
+        )
         torch.cuda.synchronize()
         return ms_since(start), "ok"
     except Exception as exc:
         print(f"GGNN error: {exc}")
-        return None, "error"
-
-
-def time_cuvs_cagra_gpu(data: np.ndarray, k: int) -> Tuple[Optional[float], str]:
-    if data.shape[0] == 0:
-        return 0.0, "empty"
-    try:
-        import cupy as cp
-        from cuvs.neighbors import cagra
-    except ImportError:
-        return None, "not_installed"
-
-    try:
-        start = time.perf_counter()
-        dataset = cp.asarray(data)
-        build_params = cagra.IndexParams(metric="sqeuclidean")
-        index = cagra.build(build_params, dataset)
-        search_params = cagra.SearchParams()
-        cagra.search(search_params, index, dataset, k)
-        cp.cuda.Stream.null.synchronize()
-        return ms_since(start), "ok"
-    except Exception as exc:
-        print(f"CAGRA error: {exc}")
         return None, "error"
 
 
@@ -197,7 +154,7 @@ def read_next_run(path: str) -> Tuple[Tuple[int, int, int], int]:
     while idx < len(lines) and not lines[idx].strip():
         idx += 1
     if idx >= len(lines):
-        raise RuntimeError("No runs left in gpu-runs.txt")
+        raise RuntimeError("No runs left in gpu-runs-ggnn.txt")
     return parse_run_line(lines[idx]), idx
 
 
@@ -211,21 +168,20 @@ def delete_run_line(path: str, line_index: int) -> None:
         f.writelines(remaining)
 
 
-def append_results(
+def append_result(
     path: str,
     dim: int,
     points: int,
     k: int,
-    results: Dict[str, Tuple[Optional[float], str]],
+    time_ms: Optional[float],
+    status: str,
 ) -> None:
     file_exists = os.path.exists(path)
     with open(path, "a", encoding="utf-8", newline="") as csvfile:
         writer = csv.writer(csvfile)
         if not file_exists:
-            writer.writerow(
-                ["dim", "points", "k", "method", "time_ms", "status"])
-        for method, (time_ms, status) in results.items():
-            writer.writerow([dim, points, k, method, time_ms, status])
+            writer.writerow(["dim", "points", "k", "time_ms", "status"])
+        writer.writerow([dim, points, k, time_ms, status])
 
 
 def main() -> None:
@@ -245,17 +201,11 @@ def main() -> None:
             print(str(exc))
             return
 
-        print(f"Running GPU benchmarks: dim={dim}, points={points}, k={k}")
+        print(f"Running GGNN benchmark: dim={dim}, points={points}, k={k}")
         data_np = load_data(points, dim)
         data_gpu = torch.tensor(data_np, dtype=torch.float32, device="cuda")
-
-        results: Dict[str, Tuple[Optional[float], str]] = {
-            "faiss_gpu": time_faiss_gpu(data_np, k),
-            "ggnn": time_ggnn(data_gpu, k),
-            "cuvs_cagra": time_cuvs_cagra_gpu(data_np, k),
-        }
-
-        append_results(output_path, dim, points, k, results)
+        time_ms, status = time_ggnn(data_gpu, k)
+        append_result(output_path, dim, points, k, time_ms, status)
         delete_run_line(runs_path, line_index)
         print(f"Wrote results to {output_path} and removed run line.")
 

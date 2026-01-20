@@ -5,15 +5,18 @@ Outputs all-runs.txt, cpu-runs.txt, and gpu-runs.txt in this directory.
 Each line is CSV: dim,points,k (no header).
 """
 
-from __future__ import annotations
-
 import os
 from typing import Iterable, List, Tuple
 
 
 RUNS_FILENAME = "all-runs.txt"
 CPU_RUNS_FILENAME = "cpu-runs.txt"
-GPU_RUNS_FILENAME = "gpu-runs.txt"
+GPU_MODEL_RUNS = {
+    "faiss_gpu": "gpu-runs-faiss_gpu.txt",
+    "ggnn": "gpu-runs-ggnn.txt",
+    "cuvs_cagra": "gpu-runs-cuvs_cagra.txt",
+    "fgc_gpu": "gpu-runs-fgc_gpu.txt",
+}
 
 
 def points_list() -> List[int]:
@@ -78,20 +81,24 @@ def main() -> None:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     all_runs_path = os.path.join(base_dir, RUNS_FILENAME)
     cpu_runs_path = os.path.join(base_dir, CPU_RUNS_FILENAME)
-    gpu_runs_path = os.path.join(base_dir, GPU_RUNS_FILENAME)
+    gpu_runs_paths = [
+        os.path.join(base_dir, filename) for filename in GPU_MODEL_RUNS.values()
+    ]
 
     combos = build_combinations()
     write_runs_file(all_runs_path, combos, repeats=10)
 
-    # Duplicate to CPU/GPU run queues.
-    for target_path in (cpu_runs_path, gpu_runs_path):
+    # Duplicate to CPU run queue and per-model GPU run queues.
+    for target_path in (cpu_runs_path, *gpu_runs_paths):
         with open(all_runs_path, "r", encoding="utf-8") as src:
             content = src.read()
         with open(target_path, "w", encoding="utf-8") as dst:
             dst.write(content)
 
     print(f"Wrote {all_runs_path}")
-    print(f"Duplicated to {cpu_runs_path} and {gpu_runs_path}")
+    print(f"Duplicated to {cpu_runs_path}")
+    for target_path in gpu_runs_paths:
+        print(f"Duplicated to {target_path}")
 
 
 if __name__ == "__main__":
