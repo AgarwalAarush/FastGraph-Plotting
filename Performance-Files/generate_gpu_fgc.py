@@ -18,6 +18,8 @@ from fastgraphcompute import binned_select_knn
 SEED = 42
 RUNS_FILE = "gpu-runs-fgc_gpu.txt"
 OUTPUT_CSV = "gpu_fgc_gpu_performance.csv"
+ENABLE_EXACT_METRICS = False
+EXACT_KNN_BATCH_SIZE = 1024
 
 # Data paths (match vector-analysis.ipynb/data-analysis.py)
 DATA_DIR = os.environ.get("CLIC_DATA_DIR", "/workspace/data")
@@ -107,19 +109,110 @@ def ms_since(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
 
 
-def time_fgc_gpu(data_gpu: torch.Tensor, k: int) -> Tuple[Optional[float], str]:
+def time_fgc_gpu(
+    data_gpu: torch.Tensor,
+    k: int,
+    return_results: bool = False,
+) -> Tuple[Optional[float], str, Optional[torch.Tensor], Optional[torch.Tensor]]:
     if data_gpu.shape[0] == 0:
-        return 0.0, "empty"
+        return 0.0, "empty", None, None
     try:
         start = time.perf_counter()
         coordinates = data_gpu.contiguous()
         row_splits = torch.tensor([0, len(data_gpu)], dtype=torch.int64, device="cuda")
-        binned_select_knn(k, coordinates, row_splits, direction=None, n_bins=None)
+        if return_results:
+            indices, distances = binned_select_knn(
+                k, coordinates, row_splits, direction=None, n_bins=None
+            )
+        else:
+            indices, distances = None, None
+            binned_select_knn(k, coordinates, row_splits, direction=None, n_bins=None)
         torch.cuda.synchronize()
-        return ms_since(start), "ok"
+        return ms_since(start), "ok", indices, distances
     except Exception as exc:
         print(f"FGC error: {exc}")
-        return None, "error"
+        return None, "error", None, None
+
+
+def exact_knn_cpu(
+    data: np.ndarray, k: int, batch_size: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    if data.shape[0] == 0:
+        return np.empty((0, k), dtype=np.int64), np.empty((0, k), dtype=np.float32)
+    k = min(k, data.shape[0])
+    data_t = torch.from_numpy(data.astype(np.float32, copy=False))
+    n_points = data_t.shape[0]
+    all_indices = np.empty((n_points, k), dtype=np.int64)
+    all_distances = np.empty((n_points, k), dtype=np.float32)
+    with torch.no_grad():
+        for start in range(0, n_points, batch_size):
+            end = min(start + batch_size, n_points)
+            queries = data_t[start:end]
+            distances = torch.cdist(queries, data_t, p=2)
+            top_dists, top_indices = torch.topk(
+                distances, k, dim=1, largest=False, sorted=True
+            )
+            all_indices[start:end] = top_indices.cpu().numpy()
+            all_distances[start:end] = top_dists.cpu().numpy()
+    return all_indices, all_distances
+
+
+def compute_knn_metrics(
+    approx_indices: np.ndarray,
+    approx_distances: np.ndarray,
+    exact_indices: np.ndarray,
+    exact_distances: np.ndarray,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    n_queries = exact_indices.shape[0]
+    if n_queries == 0:
+        return None, None, None
+    k = exact_indices.shape[1]
+    total_recall = 0.0
+    exact_match_count = 0
+    max_distance_error: Optional[float] = None
+    for i in range(n_queries):
+        approx_set = set(int(x) for x in approx_indices[i])
+        exact_set = set(int(x) for x in exact_indices[i])
+        intersection = approx_set & exact_set
+        total_recall += len(intersection) / k if k else 0.0
+        if approx_set == exact_set:
+            exact_match_count += 1
+        if intersection:
+            exact_dist_map = {
+                int(idx): float(exact_distances[i, j])
+                for j, idx in enumerate(exact_indices[i])
+            }
+            for j, idx in enumerate(approx_indices[i]):
+                idx_int = int(idx)
+                if idx_int not in exact_dist_map:
+                    continue
+                err = abs(float(approx_distances[i, j]) - exact_dist_map[idx_int])
+                if max_distance_error is None or err > max_distance_error:
+                    max_distance_error = err
+    recall_at_k = total_recall / n_queries
+    exact_match_rate = exact_match_count / n_queries
+    return recall_at_k, exact_match_rate, max_distance_error
+
+
+def ensure_csv_header(path: str, header: list[str]) -> None:
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            existing_header = next(reader)
+        except StopIteration:
+            return
+    if existing_header == header:
+        return
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=header)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in header})
 
 
 def parse_run_line(line: str) -> Tuple[int, int, int]:
@@ -158,13 +251,24 @@ def append_result(
     k: int,
     time_ms: Optional[float],
     status: str,
+    recall_at_k: Optional[float] = None,
+    exact_match_rate: Optional[float] = None,
+    max_distance_error: Optional[float] = None,
+    include_metrics: bool = False,
 ) -> None:
+    header = ["dim", "points", "k", "time_ms", "status"]
+    if include_metrics:
+        header += ["recall_at_k", "exact_match_rate", "max_distance_error"]
+        ensure_csv_header(path, header)
     file_exists = os.path.exists(path)
     with open(path, "a", encoding="utf-8", newline="") as csvfile:
         writer = csv.writer(csvfile)
         if not file_exists:
-            writer.writerow(["dim", "points", "k", "time_ms", "status"])
-        writer.writerow([dim, points, k, time_ms, status])
+            writer.writerow(header)
+        row = [dim, points, k, time_ms, status]
+        if include_metrics:
+            row += [recall_at_k, exact_match_rate, max_distance_error]
+        writer.writerow(row)
 
 
 def main() -> None:
@@ -187,8 +291,39 @@ def main() -> None:
         print(f"Running FGC GPU benchmark: dim={dim}, points={points}, k={k}")
         data_np = load_data(points, dim)
         data_gpu = torch.tensor(data_np, dtype=torch.float32, device="cuda")
-        time_ms, status = time_fgc_gpu(data_gpu, k)
-        append_result(output_path, dim, points, k, time_ms, status)
+        time_ms, status, approx_indices, approx_distances = time_fgc_gpu(
+            data_gpu, k, return_results=ENABLE_EXACT_METRICS
+        )
+        recall_at_k = None
+        exact_match_rate = None
+        max_distance_error = None
+        if (
+            ENABLE_EXACT_METRICS
+            and status == "ok"
+            and approx_indices is not None
+            and approx_distances is not None
+        ):
+            exact_indices, exact_distances = exact_knn_cpu(
+                data_np, k, EXACT_KNN_BATCH_SIZE
+            )
+            recall_at_k, exact_match_rate, max_distance_error = compute_knn_metrics(
+                approx_indices.detach().cpu().numpy(),
+                approx_distances.detach().cpu().numpy(),
+                exact_indices,
+                exact_distances,
+            )
+        append_result(
+            output_path,
+            dim,
+            points,
+            k,
+            time_ms,
+            status,
+            recall_at_k=recall_at_k,
+            exact_match_rate=exact_match_rate,
+            max_distance_error=max_distance_error,
+            include_metrics=ENABLE_EXACT_METRICS,
+        )
         delete_run_line(runs_path, line_index)
         print(f"Wrote results to {output_path} and removed run line.")
         del data_gpu
