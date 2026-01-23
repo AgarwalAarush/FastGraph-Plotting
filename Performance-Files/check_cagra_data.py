@@ -26,7 +26,7 @@ import numpy as np
 
 SEED = 42
 
-DATA_DIR = os.path.expanduser(os.environ.get("CLIC_DATA_DIR", "/workspace/data"))
+DATA_DIR = os.path.expanduser(os.environ.get("CLIC_DATA_DIR", "/home/export/aarusha/Performance/data/"))
 ARRAY_RECORD_GLOB = os.environ.get(
     "CLIC_ARRAY_RECORD_GLOB", "clic_edm_qq_pf-test.array_record-*"
 )
@@ -356,6 +356,96 @@ def compute_norm_stats(
     }
 
 
+def _nearest_neighbor_distances(
+    sample: np.ndarray, chunk_size: int
+) -> np.ndarray:
+    n = sample.shape[0]
+    if n < 2:
+        return np.array([], dtype=np.float64)
+    sample64 = sample.astype(np.float64, copy=False)
+    nn = np.empty(n, dtype=np.float64)
+    for start in range(0, n, chunk_size):
+        end = min(n, start + chunk_size)
+        chunk = sample64[start:end]
+        dists = np.sum((chunk[:, None, :] - sample64[None, :, :]) ** 2, axis=2)
+        for i in range(end - start):
+            dists[i, start + i] = np.inf
+        nn[start:end] = np.sqrt(np.min(dists, axis=1))
+    return nn
+
+
+def _nearest_neighbor_distances_to_reference(
+    points: np.ndarray,
+    reference: np.ndarray,
+    chunk_size: int,
+    self_indices: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    if points.shape[0] == 0 or reference.shape[0] == 0:
+        return np.array([], dtype=np.float64)
+    points64 = points.astype(np.float64, copy=False)
+    ref64 = reference.astype(np.float64, copy=False)
+    nn = np.empty(points.shape[0], dtype=np.float64)
+    for start in range(0, points.shape[0], chunk_size):
+        end = min(points.shape[0], start + chunk_size)
+        chunk = points64[start:end]
+        dists = np.sum((chunk[:, None, :] - ref64[None, :, :]) ** 2, axis=2)
+        if self_indices is not None:
+            for i, ref_idx in enumerate(self_indices[start:end]):
+                if 0 <= ref_idx < ref64.shape[0]:
+                    dists[i, ref_idx] = np.inf
+        nn[start:end] = np.sqrt(np.min(dists, axis=1))
+    return nn
+
+
+def compute_spread_stats(
+    x: np.ndarray,
+    sample_size: int,
+    hopkins_size: int,
+    chunk_size: int,
+    rng: np.random.Generator,
+) -> Dict[str, object]:
+    finite_mask = np.isfinite(x).all(axis=1)
+    finite_x = x[finite_mask]
+    sample = sample_rows(finite_x, sample_size, rng)
+    if sample.shape[0] < 2:
+        return {"sample_size": int(sample.shape[0]), "status": "skip"}
+
+    nn_dist = _nearest_neighbor_distances(sample, chunk_size=chunk_size)
+    nn_stats = {
+        "nn_median": float(np.median(nn_dist)),
+        "nn_p10": float(np.percentile(nn_dist, 10)),
+        "nn_p90": float(np.percentile(nn_dist, 90)),
+    }
+
+    m = min(hopkins_size, sample.shape[0])
+    if m < 2:
+        return {"sample_size": int(sample.shape[0]), "status": "skip", **nn_stats}
+
+    mins = np.min(sample, axis=0)
+    maxs = np.max(sample, axis=0)
+    random_points = rng.uniform(mins, maxs, size=(m, sample.shape[1]))
+
+    data_indices = rng.choice(sample.shape[0], size=m, replace=False)
+    data_points = sample[data_indices]
+    w = _nearest_neighbor_distances_to_reference(
+        data_points, sample, chunk_size=chunk_size, self_indices=data_indices
+    )
+
+    random_dist = _nearest_neighbor_distances_to_reference(
+        random_points, sample, chunk_size=chunk_size
+    )
+
+    w_sum = float(np.sum(w))
+    u_sum = float(np.sum(random_dist))
+    hopkins = u_sum / max(1e-12, (u_sum + w_sum))
+
+    return {
+        "sample_size": int(sample.shape[0]),
+        "hopkins": hopkins,
+        **nn_stats,
+    }
+
+
 def compute_column_semantics(
     x: np.ndarray, sample_size: int, monotonic_sample_size: int, rng: np.random.Generator
 ) -> Dict[int, Dict[str, object]]:
@@ -597,6 +687,35 @@ def analyze_config(
         )
     )
 
+    if args.spread:
+        spread = compute_spread_stats(
+            data,
+            sample_size=args.spread_sample_size,
+            hopkins_size=args.spread_hopkins_size,
+            chunk_size=max(100, min(args.chunk_size, 1000)),
+            rng=rng,
+        )
+        if spread.get("status") == "skip":
+            spread_status = "SKIP"
+            spread_message = "insufficient sample for spread check"
+        else:
+            hopkins = spread["hopkins"]
+            spread_status = "PASS"
+            if hopkins > args.spread_warn_high or hopkins < args.spread_warn_low:
+                spread_status = "WARN"
+            spread_message = (
+                f"hopkins={hopkins:.3f}, nn_median={spread['nn_median']:.3e}, "
+                f"nn_p10={spread['nn_p10']:.3e}, nn_p90={spread['nn_p90']:.3e}"
+            )
+        results.append(
+            CheckResult(
+                name="spread",
+                status=spread_status,
+                message=spread_message,
+                details=spread,
+            )
+        )
+
     # Column semantics
     semantics = compute_column_semantics(
         data,
@@ -663,6 +782,12 @@ def main() -> None:
     parser.add_argument("--sample-size", type=int, default=200000, help="Default sample size.")
     parser.add_argument("--dup-sample-size", type=int, default=200000, help="Sample size for duplicates.")
     parser.add_argument("--dup-round", type=float, default=1e-6, help="Rounding step for duplicates.")
+    parser.add_argument(
+        "--dup-warn-ratio",
+        type=float,
+        default=0.001,
+        help="Warn when duplicate ratio exceeds this threshold.",
+    )
     parser.add_argument("--norm-sample-size", type=int, default=200000, help="Sample size for norm stats.")
     parser.add_argument("--semantic-sample-size", type=int, default=200000, help="Sample size for semantics.")
     parser.add_argument("--monotonic-sample-size", type=int, default=100000, help="Rows for monotonic check.")
@@ -670,6 +795,11 @@ def main() -> None:
     parser.add_argument("--knn", action="store_true", help="Run quick kNN sanity check.")
     parser.add_argument("--knn-sample-size", type=int, default=2000, help="Sample size for quick kNN.")
     parser.add_argument("--knn-k", type=int, default=40, help="k for quick kNN check.")
+    parser.add_argument("--spread", action="store_true", help="Run spread/clumping heuristic checks.")
+    parser.add_argument("--spread-sample-size", type=int, default=2000, help="Sample size for spread checks.")
+    parser.add_argument("--spread-hopkins-size", type=int, default=200, help="Sample size for Hopkins statistic.")
+    parser.add_argument("--spread-warn-high", type=float, default=0.75, help="Warn if Hopkins exceeds this.")
+    parser.add_argument("--spread-warn-low", type=float, default=0.25, help="Warn if Hopkins below this.")
 
     parser.add_argument("--max-abs-threshold", type=float, default=1e6, help="Extreme abs value threshold.")
     parser.add_argument("--near-constant-threshold", type=float, default=1e-12, help="Std threshold for near-constant.")

@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""
+GPU-only performance analysis for FGC vs GPU algorithms.
+
+Generates the same plot suite as process_csvs.py but using
+gpu-performance-data/*.csv with status filtering.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+
+ALGORITHMS = {
+    "FAISS_GPU": {
+        "display_name": "FAISS-GPU",
+        "color": "#1B9E77",
+        "time_column": "faiss_gpu_time",
+        "marker_symbol": "circle",
+        "file_name": "faiss-gpu.csv",
+    },
+    "CUVS_CAGRA": {
+        "display_name": "CUVS-CAGRA",
+        "color": "#D95F02",
+        "time_column": "cuvs_cagra_time",
+        "marker_symbol": "triangle-up",
+        "file_name": "cuvs-cagra.csv",
+    },
+    "GGNN": {
+        "display_name": "GGNN",
+        "color": "#7570B3",
+        "time_column": "ggnn_time",
+        "marker_symbol": "cross",
+        "file_name": "ggnn.csv",
+    },
+}
+
+FGC_FILE = "fgc-gpu.csv"
+FGC_TIME_COLUMN = "fgc_time"
+
+GPU_DATA_DIR = "gpu-performance-data"
+PLOTS_DIR = "plots"
+MAX_DATASET_SIZE = 5_000_000
+
+
+def _standardize_gpu_df(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map = {
+        "dim": "dimension",
+        "points": "size",
+        "time_ms": "time_ms",
+        "status": "status",
+        "k": "k",
+    }
+    df = df.rename(columns=rename_map)
+    for col in ["dimension", "size", "k", "time_ms"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def _report_errors(file_name: str, error_rows: pd.DataFrame) -> None:
+    if error_rows.empty:
+        print(f"{file_name}: no error rows")
+        return
+
+    unique_keys = (
+        error_rows[["dimension", "size", "k"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(["dimension", "size", "k"])
+    )
+    print(f"{file_name}: {len(error_rows)} error rows")
+    print("  unique (dim, points, k):")
+    for _, row in unique_keys.iterrows():
+        print(
+            f"   - ({int(row['dimension'])}, {int(row['size'])}, {int(row['k'])})")
+
+
+def _load_gpu_file(file_name: str) -> pd.DataFrame:
+    path = os.path.join(GPU_DATA_DIR, file_name)
+    if not os.path.exists(path):
+        print(f"Missing file: {path}")
+        return pd.DataFrame()
+
+    df = pd.read_csv(path)
+    df = _standardize_gpu_df(df)
+
+    if "status" in df.columns:
+        error_rows = df[df["status"] == "error"].copy()
+        _report_errors(file_name, error_rows)
+        df = df[df["status"] != "error"].copy()
+
+    return df
+
+
+def load_and_prepare_gpu_data() -> pd.DataFrame:
+    print("Loading GPU performance data...")
+
+    fgc_df = _load_gpu_file(FGC_FILE)
+    if fgc_df.empty:
+        print("FGC GPU data not found or empty.")
+        return pd.DataFrame()
+
+    fgc_df = fgc_df.rename(columns={"time_ms": FGC_TIME_COLUMN})
+    fgc_df = fgc_df[["size", "k", "dimension", FGC_TIME_COLUMN]].copy()
+
+    unified = fgc_df.copy()
+
+    for _, alg_info in ALGORITHMS.items():
+        alg_df = _load_gpu_file(alg_info["file_name"])
+        if alg_df.empty:
+            continue
+
+        alg_df = alg_df.rename(columns={"time_ms": alg_info["time_column"]})
+        alg_df = alg_df[["size", "k", "dimension",
+                         alg_info["time_column"]]].copy()
+
+        unified = pd.merge(
+            unified,
+            alg_df,
+            on=["size", "k", "dimension"],
+            how="outer",
+        )
+
+    print(f"Loaded unified GPU data: {len(unified)} records")
+    return unified
+
+
+def plot_fgc_speedup_analysis(
+    data: pd.DataFrame,
+    analysis_type: str,
+    **kwargs,
+) -> go.Figure:
+    y_axis_cap = kwargs.get("y_axis_cap", None)
+    custom_title = kwargs.get("custom_title", None)
+    log_y = kwargs.get("log_y", False)
+
+    if analysis_type == "dimensions":
+        size = kwargs.get("size", 1_000_000)
+        k = kwargs.get("k", 40)
+        max_dimensions = kwargs.get("max_dimensions", 20)
+        title = f"GPU-only FGC Speedup Analysis: {size//1_000_000}M Points, K={k}"
+        if y_axis_cap:
+            title += f" (Y-Axis Capped at {y_axis_cap})"
+
+        filtered_data = data[
+            (data["size"] == size)
+            & (data["k"] == k)
+            & (data["dimension"] <= max_dimensions)
+        ].copy().sort_values("dimension")
+
+        x_col = "dimension"
+        x_title = "Number of Dimensions (d)"
+        x_range = [1, max_dimensions]
+    else:
+        dimension = kwargs.get("dimension", 3)
+        k = kwargs.get("k", 40)
+        title = f"GPU-only FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
+        if y_axis_cap:
+            title += f" (Y-Axis Capped at {y_axis_cap})"
+
+        filtered_data = data[
+            (data["dimension"] == dimension)
+            & (data["k"] == k)
+            & (data["size"] <= MAX_DATASET_SIZE)
+        ].copy().sort_values("size")
+
+        allowed_sizes = [0, 100_000, 500_000, 1_000_000]
+        current_size = 1_500_000
+        while current_size <= MAX_DATASET_SIZE:
+            allowed_sizes.append(current_size)
+            current_size += 500_000
+
+        filtered_data = filtered_data[filtered_data["size"].isin(
+            allowed_sizes)].copy()
+
+        x_col = "size"
+        x_title = "Dataset Size"
+        x_range = [0, MAX_DATASET_SIZE]
+
+    fig = go.Figure()
+
+    for alg_key, alg_info in ALGORITHMS.items():
+        time_col = alg_info["time_column"]
+        if time_col not in filtered_data.columns or FGC_TIME_COLUMN not in filtered_data.columns:
+            continue
+
+        valid_data = filtered_data[
+            (filtered_data[time_col].notna())
+            & (filtered_data[FGC_TIME_COLUMN].notna())
+            & (filtered_data[time_col] > 0)
+            & (filtered_data[FGC_TIME_COLUMN] > 0)
+        ].copy()
+
+        if valid_data.empty:
+            continue
+
+        speedup = valid_data[time_col] / valid_data[FGC_TIME_COLUMN]
+
+        fig.add_trace(
+            go.Scatter(
+                x=valid_data[x_col],
+                y=speedup,
+                mode="lines+markers",
+                name=alg_info["display_name"],
+                line=dict(color=alg_info["color"], width=3),
+                marker=dict(size=8, symbol=alg_info["marker_symbol"]),
+                showlegend=True,
+                hovertemplate=(
+                    f"<b>{alg_info['display_name']}</b><br>"
+                    f"{x_title}: %{{x}}<br>"
+                    "Speedup: %{{y:.2f}}×<br>"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=x_range,
+            y=[1, 1],
+            mode="lines",
+            name="No Speedup",
+            line=dict(color="gray", dash="dash", width=2),
+            showlegend=True,
+            hovertemplate="No speedup reference<extra></extra>",
+        )
+    )
+
+    fig.update_xaxes(
+        range=x_range,
+        gridcolor="lightgray",
+        title=x_title,
+        title_font_size=18,
+        tickfont=dict(size=16),
+    )
+
+    if analysis_type == "sizes":
+        tick_vals = [0]
+        tick_texts = ["0"]
+        current_size = 1_000_000
+        while current_size <= MAX_DATASET_SIZE:
+            tick_vals.append(current_size)
+            tick_texts.append(f"{current_size//1_000_000}M")
+            current_size += 1_000_000
+
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=tick_vals,
+            ticktext=tick_texts,
+        )
+
+    y_axis_config = {
+        "gridcolor": "lightgray",
+        "title": "FGC Speedup Factor",
+        "title_font_size": 18,
+        "tickfont": dict(size=16),
+    }
+    if y_axis_cap:
+        if log_y:
+            y_axis_config["range"] = [0, np.log10(y_axis_cap)]
+        else:
+            y_axis_config["range"] = [0, y_axis_cap]
+
+    if log_y:
+        y_axis_config["type"] = "log"
+        y_axis_config["dtick"] = 1
+        y_axis_config["minor"] = dict(showgrid=False, ticklen=0)
+        y_axis_config["tickformat"] = ".0f"
+
+    fig.update_yaxes(**y_axis_config)
+
+    if custom_title:
+        title = custom_title
+
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.5,
+            font_size=21,
+            font_family="Arial",
+        ),
+        height=500,
+        width=800 if analysis_type == "dimensions" else 1200,
+        template="plotly_white",
+        font=dict(family="Arial", size=16),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+        margin=dict(t=80, b=60, l=80, r=80),
+    )
+
+    return fig
+
+
+def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs) -> go.Figure:
+    y_axis_cap = kwargs.pop("y_axis_cap", 50)
+
+    if analysis_type == "dimensions":
+        size = kwargs.get("size", 1_000_000)
+        k = kwargs.get("k", 40)
+        max_dimensions = kwargs.get("max_dimensions", 15)
+
+        subtitle_left = f"Standard View (d ≤ {max_dimensions})"
+        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        main_title = f"GPU-only FGC Dimensional Scaling Analysis ({size//1_000_000}M Vectors, K={k})"
+    else:
+        dimension = kwargs.get("dimension", 3)
+        k = kwargs.get("k", 40)
+        subtitle_left = "Standard View"
+        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        main_title = f"GPU-only FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=(subtitle_left, subtitle_right),
+        horizontal_spacing=0.08,
+    )
+
+    for annotation in fig["layout"]["annotations"]:
+        annotation["font"] = dict(size=16)
+
+    fig_normal = plot_fgc_speedup_analysis(
+        data, analysis_type, custom_title=" ", **kwargs
+    )
+    fig_zoomed = plot_fgc_speedup_analysis(
+        data, analysis_type, custom_title=" ", y_axis_cap=y_axis_cap, **kwargs
+    )
+
+    for trace in fig_normal.data:
+        fig.add_trace(trace, row=1, col=1)
+
+    for trace in fig_zoomed.data:
+        trace.showlegend = False
+        fig.add_trace(trace, row=1, col=2)
+
+    x_title = "Number of Dimensions (d)" if analysis_type == "dimensions" else "Dataset Size"
+    fig.update_xaxes(title_text=x_title, title_font_size=18,
+                     tickfont=dict(size=16), row=1, col=1)
+    fig.update_xaxes(title_text=x_title, title_font_size=18,
+                     tickfont=dict(size=16), row=1, col=2)
+    fig.update_yaxes(title_text="FGC Speedup Factor",
+                     title_font_size=18, tickfont=dict(size=16), row=1, col=1)
+    fig.update_yaxes(
+        title_text="FGC Speedup Factor",
+        title_font_size=18,
+        tickfont=dict(size=16),
+        range=[0, y_axis_cap],
+        row=1, col=2,
+    )
+
+    if analysis_type == "sizes":
+        tick_vals = [0]
+        tick_texts = ["0"]
+        current_size = 1_000_000
+        while current_size <= MAX_DATASET_SIZE:
+            tick_vals.append(current_size)
+            tick_texts.append(f"{current_size//1_000_000}M")
+            current_size += 1_000_000
+
+        for col in [1, 2]:
+            fig.update_xaxes(
+                tickmode="array",
+                tickvals=tick_vals,
+                ticktext=tick_texts,
+                row=1, col=col,
+            )
+
+    fig.update_layout(
+        title_text=main_title,
+        title_font_size=21,
+        height=600,
+        width=1400,
+        template="plotly_white",
+        font=dict(family="Arial", size=16),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+        margin=dict(t=80, b=60, l=80, r=80),
+    )
+
+    return fig
+
+
+def plot_d3_d5_comparison(data: pd.DataFrame, k: int = 40) -> go.Figure:
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("D=3", "D=5"),
+        horizontal_spacing=0.08,
+    )
+
+    for annotation in fig["layout"]["annotations"]:
+        annotation["font"] = dict(size=16)
+
+    fig_d3 = plot_fgc_speedup_analysis(
+        data, "sizes", dimension=3, k=k, custom_title=" ")
+    fig_d5 = plot_fgc_speedup_analysis(
+        data, "sizes", dimension=5, k=k, custom_title=" ")
+
+    for trace in fig_d3.data:
+        trace.showlegend = False
+        fig.add_trace(trace, row=1, col=1)
+
+    for trace in fig_d5.data:
+        fig.add_trace(trace, row=1, col=2)
+
+    x_title = "Dataset Size"
+    tick_vals = [0]
+    tick_texts = ["0"]
+    current_size = 1_000_000
+    while current_size <= MAX_DATASET_SIZE:
+        tick_vals.append(current_size)
+        tick_texts.append(f"{current_size//1_000_000}M")
+        current_size += 1_000_000
+
+    for col in [1, 2]:
+        fig.update_xaxes(
+            title_text=x_title,
+            title_font_size=18,
+            tickfont=dict(size=16),
+            tickmode="array",
+            tickvals=tick_vals,
+            ticktext=tick_texts,
+            row=1, col=col,
+        )
+        fig.update_yaxes(
+            title_text="FGC Speedup Factor" if col == 1 else "",
+            title_font_size=18 if col == 1 else None,
+            tickfont=dict(size=16),
+            row=1, col=col,
+        )
+
+    fig.update_layout(
+        title_text=f"GPU-only FGC Speedup Analysis: D=3 vs D=5 Comparison (K={k}, Varying Sizes)",
+        title_font_size=21,
+        height=600,
+        width=1400,
+        template="plotly_white",
+        font=dict(family="Arial", size=16),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+        margin=dict(t=80, b=60, l=80, r=80),
+    )
+
+    return fig
+
+
+def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=("K=10", "K=40", "K=100"),
+        horizontal_spacing=0.08,
+    )
+
+    for annotation in fig["layout"]["annotations"]:
+        annotation["font"] = dict(size=16)
+
+    k_values = [10, 40, 100]
+    for i, k in enumerate(k_values, 1):
+        single_fig = plot_fgc_speedup_analysis(
+            data,
+            "dimensions",
+            size=1_000_000,
+            k=k,
+            max_dimensions=10,
+        )
+
+        for trace in single_fig.data:
+            trace.showlegend = (i == 1)
+            fig.add_trace(trace, row=1, col=i)
+
+    for i in range(1, 4):
+        fig.update_xaxes(
+            title_text="Number of Dimensions (d)",
+            title_font_size=18,
+            tickfont=dict(size=16),
+            range=[2, 10],
+            row=1, col=i,
+        )
+        fig.update_yaxes(
+            title_text="FGC Speedup Factor" if i == 1 else "",
+            title_font_size=18 if i == 1 else None,
+            tickfont=dict(size=16),
+            row=1, col=i,
+        )
+
+    fig.update_layout(
+        title_text="GPU-only FGC Dimensional Scaling Analysis: K Comparison (1M Vectors, d=2-10)",
+        title_font_size=21,
+        height=600,
+        width=1800,
+        template="plotly_white",
+        font=dict(family="Arial", size=16),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="right",
+            x=0.98,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="lightgray",
+            borderwidth=1,
+        ),
+        margin=dict(t=80, b=60, l=80, r=80),
+    )
+    return fig
+
+
+def save_figure(fig: go.Figure, filename: str, width: int = 1200, height: int = 600) -> None:
+    fig.write_image(filename, width=width, height=height, scale=2)
+    print(f"✓ Saved: {filename}")
+
+
+def create_plots() -> None:
+    print("\n" + "=" * 60)
+    print("Creating GPU Performance Analysis Plots")
+    print("=" * 60)
+
+    data = load_and_prepare_gpu_data()
+    if data.empty:
+        print("No GPU data available for plotting.")
+        return
+
+    if not os.path.exists(PLOTS_DIR):
+        os.makedirs(PLOTS_DIR)
+
+    print("\n1. Creating GPU FGC speedup analysis: D=3, K=40, varying sizes (with zoom)...")
+    fig1 = plot_side_by_side_with_zoom(
+        data, "sizes", dimension=3, k=40, y_axis_cap=150)
+    save_figure(fig1, os.path.join(
+        PLOTS_DIR, "gpu_fgc_speedup_d3_all_algorithms.png"), 1400, 600)
+
+    print("\n2. Creating GPU FGC speedup analysis: D=5, K=40, varying sizes (with zoom)...")
+    fig2 = plot_side_by_side_with_zoom(
+        data, "sizes", dimension=5, k=40, y_axis_cap=50)
+    save_figure(fig2, os.path.join(
+        PLOTS_DIR, "gpu_fgc_speedup_d5_all_algorithms.png"), 1400, 600)
+
+    print("\n3. Creating GPU K comparison dimensional analysis: K=10,40,100 @ 1M...")
+    fig3 = plot_k_comparison_dimensional_analysis(data)
+    save_figure(fig3, os.path.join(
+        PLOTS_DIR, "gpu_fgc_k_comparison_1M_d2-10_all_algorithms.png"), 1800, 600)
+
+    print("\n4. Creating GPU dimensional scaling analysis: 1M, K=40 (with zoom)...")
+    fig4 = plot_side_by_side_with_zoom(
+        data,
+        "dimensions",
+        size=1_000_000,
+        k=40,
+        max_dimensions=15,
+        y_axis_cap=50,
+    )
+    save_figure(fig4, os.path.join(
+        PLOTS_DIR, "gpu_fgc_dimensional_scaling_1M_k40_all_algorithms.png"), 1400, 600)
+
+    print("\n5. Creating GPU D=3 vs D=5 comparison: K=40, varying sizes...")
+    fig5 = plot_d3_d5_comparison(data, k=40)
+    save_figure(fig5, os.path.join(
+        PLOTS_DIR, "gpu_fgc_speedup_d3_vs_d5_k40_all_algorithms.png"), 1400, 600)
+
+    print("\n6. Creating GPU FGC speedup analysis: D=3, K=40, varying sizes (logarithmic y-axis)...")
+    fig6 = plot_fgc_speedup_analysis(
+        data,
+        "sizes",
+        dimension=3,
+        k=40,
+        custom_title="GPU-only FastGraph Speedup at K=40, D=3",
+        log_y=True,
+    )
+    save_figure(fig6, os.path.join(
+        PLOTS_DIR, "gpu_fgc_speedup_d3_k40_log_y.png"), 1200, 500)
+
+    print("\n" + "=" * 60)
+    print("GPU Plot Generation Complete! Generated files:")
+    print("• plots/gpu_fgc_speedup_d3_all_algorithms.png")
+    print("• plots/gpu_fgc_speedup_d5_all_algorithms.png")
+    print("• plots/gpu_fgc_k_comparison_1M_d2-10_all_algorithms.png")
+    print("• plots/gpu_fgc_dimensional_scaling_1M_k40_all_algorithms.png")
+    print("• plots/gpu_fgc_speedup_d3_vs_d5_k40_all_algorithms.png")
+    print("• plots/gpu_fgc_speedup_d3_k40_log_y.png")
+    print("=" * 60)
+
+
+def main() -> None:
+    create_plots()
+
+
+if __name__ == "__main__":
+    main()
