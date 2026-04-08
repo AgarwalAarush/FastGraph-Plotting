@@ -539,6 +539,218 @@ def save_figure(fig: go.Figure, filename: str, width: int = 1200, height: int = 
     print(f"✓ Saved: {filename}")
 
 
+RECALL_DATA_DIR = "recall-data"
+MEMORY_DATA_DIR = "memory-data"
+
+# Algorithm display order / colors for reviewer plots
+ALGO_DISPLAY = {
+    "fgc":   {"name": "FGC (ours)", "color": "#E31A1C"},
+    "faiss": {"name": "FAISS-GPU",  "color": "#1B9E77"},
+    "cuvs":  {"name": "cuVS CAGRA", "color": "#D95F02"},
+    "ggnn":  {"name": "GGNN",       "color": "#7570B3"},
+}
+
+
+def _load_recall_csv(backend: str) -> pd.DataFrame:
+    path = os.path.join(RECALL_DATA_DIR, f"recall_{backend}.csv")
+    if not os.path.exists(path):
+        print(f"Missing: {path}")
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df = df[df["status"] == "ok"].copy()
+    for col in ["dim", "points", "k", "time_ms", "recall"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def _load_memory_csv() -> pd.DataFrame:
+    path = os.path.join(MEMORY_DATA_DIR, "memory_usage.csv")
+    if not os.path.exists(path):
+        print(f"Missing: {path}")
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df = df[df["status"] == "ok"].copy()
+    for col in ["dim", "points", "k", "memory_mb"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def plot_recall_exactness(
+    dim: int = 3, points: int = 500_000, k: int = 40
+) -> go.Figure:
+    """
+    Bar chart: recall@k for each algorithm at a fixed (dim, points, k) combo.
+    FGC and FAISS should show recall=1.0 (exact); cuVS/GGNN show their default-param recall.
+    cuVS default: itopk_size=128. GGNN default: tau_query=0.64.
+    """
+    bars = []
+    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+        df = _load_recall_csv(backend)
+        if df.empty:
+            continue
+        sub = df[(df["dim"] == dim) & (df["points"] == points) & (df["k"] == k)]
+        if backend == "cuvs":
+            sub = sub[sub["itopk_size"] == 128]
+        elif backend == "ggnn":
+            sub = sub[sub["tau_query"] == 0.64]
+        if sub.empty:
+            continue
+        mean_recall = sub["recall"].mean()
+        meta = ALGO_DISPLAY[backend]
+        bars.append((meta["name"], mean_recall, meta["color"]))
+
+    fig = go.Figure()
+    for name, recall, color in bars:
+        fig.add_trace(go.Bar(
+            x=[name], y=[recall],
+            marker_color=color,
+            text=[f"{recall:.4f}"],
+            textposition="outside",
+            name=name,
+        ))
+    fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
+                  annotation_text="Exact (recall = 1.0)", annotation_position="top right")
+    fig.update_layout(
+        title=f"Recall@{k} vs Brute-Force Ground Truth (D={dim}, N={points:,})",
+        xaxis_title="Algorithm",
+        yaxis_title=f"Recall@{k}",
+        yaxis=dict(range=[0, 1.12]),
+        showlegend=False,
+        font=dict(family="Arial", size=14),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
+def plot_recall_controlled_speed(
+    target_recall: float = 0.99,
+    points: int = 500_000,
+    k: int = 40,
+) -> go.Figure:
+    """
+    Bar chart: time_ms at the parameter config achieving >= target_recall for each algorithm,
+    grouped by dimension (d=3 and d=5). Shows FGC advantage even under recall-controlled
+    comparison. FGC/FAISS are always exact so they qualify unconditionally.
+    """
+    dims = [3, 5]
+    fig = make_subplots(
+        rows=1, cols=len(dims),
+        subplot_titles=[f"D={d}, N={points:,}, k={k}" for d in dims],
+        shared_yaxes=True,
+    )
+
+    for col_idx, dim in enumerate(dims, start=1):
+        for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+            df = _load_recall_csv(backend)
+            if df.empty:
+                continue
+            sub = df[(df["dim"] == dim) & (df["points"] == points) & (df["k"] == k)]
+            if sub.empty:
+                continue
+
+            if backend in ("fgc", "faiss"):
+                # Exact methods — always qualify
+                qualified = sub
+            elif backend == "cuvs":
+                # Find cheapest itopk_size achieving target recall
+                param_col = "itopk_size"
+                grouped = sub.groupby(param_col).agg(
+                    mean_recall=("recall", "mean"),
+                    mean_time=("time_ms", "mean"),
+                ).reset_index()
+                meets = grouped[grouped["mean_recall"] >= target_recall]
+                if meets.empty:
+                    meets = grouped.sort_values("mean_recall", ascending=False).head(1)
+                best = meets.sort_values("mean_time").iloc[0]
+                qualified = sub[sub[param_col] == best[param_col]]
+            elif backend == "ggnn":
+                param_col = "tau_query"
+                grouped = sub.groupby(param_col).agg(
+                    mean_recall=("recall", "mean"),
+                    mean_time=("time_ms", "mean"),
+                ).reset_index()
+                meets = grouped[grouped["mean_recall"] >= target_recall]
+                if meets.empty:
+                    meets = grouped.sort_values("mean_recall", ascending=False).head(1)
+                best = meets.sort_values("mean_time").iloc[0]
+                qualified = sub[sub[param_col] == best[param_col]]
+
+            mean_time = qualified["time_ms"].mean()
+            mean_recall = qualified["recall"].mean()
+            meta = ALGO_DISPLAY[backend]
+            fig.add_trace(go.Bar(
+                x=[meta["name"]],
+                y=[mean_time],
+                marker_color=meta["color"],
+                text=[f"{mean_time:.0f} ms<br>(r={mean_recall:.3f})"],
+                textposition="outside",
+                name=meta["name"],
+                showlegend=(col_idx == 1),
+            ), row=1, col=col_idx)
+
+    fig.update_layout(
+        title=f"Speed at ≥{int(target_recall*100)}% Recall (N={points:,}, k={k})",
+        yaxis_title="Time (ms)",
+        barmode="group",
+        font=dict(family="Arial", size=14),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def plot_memory_footprint(
+    dim: int = 3, k: int = 40
+) -> go.Figure:
+    """
+    Grouped bar chart: peak GPU memory (MB) per algorithm at 3 dataset sizes.
+    Highlights FGC's 'virtually no memory overhead' claim.
+    """
+    df = _load_memory_csv()
+    if df.empty:
+        return go.Figure()
+
+    sizes = [100_000, 1_000_000, 5_000_000]
+    size_labels = ["100k", "1M", "5M"]
+
+    fig = go.Figure()
+    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+        sub = df[(df["algorithm"] == backend) & (df["dim"] == dim) & (df["k"] == k)]
+        y_vals, x_vals = [], []
+        for sz, lbl in zip(sizes, size_labels):
+            row = sub[sub["points"] == sz]
+            if not row.empty:
+                y_vals.append(row["memory_mb"].mean())
+                x_vals.append(lbl)
+        if not y_vals:
+            continue
+        meta = ALGO_DISPLAY[backend]
+        fig.add_trace(go.Bar(
+            name=meta["name"],
+            x=x_vals,
+            y=y_vals,
+            marker_color=meta["color"],
+            text=[f"{v:.0f}" for v in y_vals],
+            textposition="outside",
+        ))
+
+    fig.update_layout(
+        title=f"Peak GPU Memory Usage (D={dim}, k={k})",
+        xaxis_title="Dataset Size",
+        yaxis_title="Peak GPU Memory (MB)",
+        barmode="group",
+        font=dict(family="Arial", size=14),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
 def create_plots() -> None:
     print("\n" + "=" * 60)
     print("Creating GPU Performance Analysis Plots")
@@ -598,6 +810,22 @@ def create_plots() -> None:
     save_figure(fig6, os.path.join(
         PLOTS_DIR, "gpu_fgc_speedup_d3_k40_log_y.png"), 1200, 500)
 
+    # ── Reviewer additions ────────────────────────────────────────────────────
+    print("\n7. Creating recall exactness proof (FGC recall=1.0 vs baselines)...")
+    fig7 = plot_recall_exactness(dim=3, points=500_000, k=40)
+    if fig7.data:
+        save_figure(fig7, os.path.join(PLOTS_DIR, "recall_exactness_proof.png"), 900, 500)
+
+    print("\n8. Creating recall-controlled speed comparison (≥99% recall)...")
+    fig8 = plot_recall_controlled_speed(target_recall=0.99, points=500_000, k=40)
+    if fig8.data:
+        save_figure(fig8, os.path.join(PLOTS_DIR, "recall_controlled_comparison.png"), 1200, 500)
+
+    print("\n9. Creating memory footprint comparison...")
+    fig9 = plot_memory_footprint(dim=3, k=40)
+    if fig9.data:
+        save_figure(fig9, os.path.join(PLOTS_DIR, "memory_footprint.png"), 900, 500)
+
     print("\n" + "=" * 60)
     print("GPU Plot Generation Complete! Generated files:")
     print("• plots/gpu_fgc_speedup_d3_all_algorithms.png")
@@ -606,6 +834,9 @@ def create_plots() -> None:
     print("• plots/gpu_fgc_dimensional_scaling_1M_k40_all_algorithms.png")
     print("• plots/gpu_fgc_speedup_d3_vs_d5_k40_all_algorithms.png")
     print("• plots/gpu_fgc_speedup_d3_k40_log_y.png")
+    print("• plots/recall_exactness_proof.png  (if recall-data/ present)")
+    print("• plots/recall_controlled_comparison.png  (if recall-data/ present)")
+    print("• plots/memory_footprint.png  (if memory-data/ present)")
     print("=" * 60)
 
 
