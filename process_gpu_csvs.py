@@ -564,13 +564,14 @@ def _load_recall_csv(backend: str) -> pd.DataFrame:
     return df
 
 
-def _load_memory_csv() -> pd.DataFrame:
+def _load_memory_csv(include_errors: bool = False) -> pd.DataFrame:
     path = os.path.join(MEMORY_DATA_DIR, "memory_usage.csv")
     if not os.path.exists(path):
         print(f"Missing: {path}")
         return pd.DataFrame()
     df = pd.read_csv(path)
-    df = df[df["status"] == "ok"].copy()
+    if not include_errors:
+        df = df[df["status"] == "ok"].copy()
     for col in ["dim", "points", "k", "memory_mb"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -708,35 +709,85 @@ def plot_memory_footprint(
 ) -> go.Figure:
     """
     Grouped bar chart: peak GPU memory (MB) per algorithm at 3 dataset sizes.
-    Highlights FGC's 'virtually no memory overhead' claim.
+    OOM (error) entries are shown as hatched bars at a fixed height with 'OOM' text.
     """
-    df = _load_memory_csv()
-    if df.empty:
+    df_ok = _load_memory_csv(include_errors=False)
+    df_all = _load_memory_csv(include_errors=True)
+    if df_all.empty:
         return go.Figure()
 
     sizes = [100_000, 1_000_000, 5_000_000]
     size_labels = ["100k", "1M", "5M"]
 
+    # Find max y for OOM bar height
+    max_mem = 0.0
+    if not df_ok.empty:
+        sub_ok = df_ok[(df_ok["dim"] == dim) & (df_ok["k"] == k)]
+        if not sub_ok.empty:
+            max_mem = sub_ok["memory_mb"].max()
+    oom_bar_height = max_mem * 1.05 if max_mem > 0 else 1000.0
+
     fig = go.Figure()
+    oom_legend_added = False
     for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
-        sub = df[(df["algorithm"] == backend) & (df["dim"] == dim) & (df["k"] == k)]
-        y_vals, x_vals = [], []
+        sub_ok_b = df_ok[(df_ok["algorithm"] == backend) & (df_ok["dim"] == dim) & (df_ok["k"] == k)]
+        sub_all_b = df_all[(df_all["algorithm"] == backend) & (df_all["dim"] == dim) & (df_all["k"] == k)]
+        y_vals, x_vals, texts = [], [], []
+        has_any = False
         for sz, lbl in zip(sizes, size_labels):
-            row = sub[sub["points"] == sz]
-            if not row.empty:
-                y_vals.append(row["memory_mb"].mean())
+            ok_row = sub_ok_b[sub_ok_b["points"] == sz]
+            all_row = sub_all_b[sub_all_b["points"] == sz]
+            if not ok_row.empty:
+                y_vals.append(ok_row["memory_mb"].mean())
                 x_vals.append(lbl)
-        if not y_vals:
+                texts.append(f"{ok_row['memory_mb'].mean():.0f}")
+                has_any = True
+            elif not all_row.empty:
+                # Error/OOM entry exists
+                y_vals.append(oom_bar_height)
+                x_vals.append(lbl)
+                texts.append("OOM")
+                has_any = True
+        if not has_any:
             continue
         meta = ALGO_DISPLAY[backend]
-        fig.add_trace(go.Bar(
-            name=meta["name"],
-            x=x_vals,
-            y=y_vals,
-            marker_color=meta["color"],
-            text=[f"{v:.0f}" for v in y_vals],
-            textposition="outside",
-        ))
+        # Separate ok and OOM bars for different styling
+        ok_y, ok_x, ok_t = [], [], []
+        oom_y, oom_x, oom_t = [], [], []
+        for xi, yi, ti in zip(x_vals, y_vals, texts):
+            if ti == "OOM":
+                oom_y.append(yi)
+                oom_x.append(xi)
+                oom_t.append(ti)
+            else:
+                ok_y.append(yi)
+                ok_x.append(xi)
+                ok_t.append(ti)
+        if ok_y:
+            fig.add_trace(go.Bar(
+                name=meta["name"],
+                x=ok_x,
+                y=ok_y,
+                marker_color=meta["color"],
+                text=ok_t,
+                textposition="outside",
+            ))
+        if oom_y:
+            fig.add_trace(go.Bar(
+                name="OOM" if not oom_legend_added else meta["name"] + " (OOM)",
+                x=oom_x,
+                y=oom_y,
+                marker_color=meta["color"],
+                marker_opacity=0.3,
+                marker_line=dict(color=meta["color"], width=2),
+                marker_pattern_shape="/",
+                text=oom_t,
+                textposition="outside",
+                textfont=dict(color="red", size=12),
+                showlegend=not oom_legend_added,
+                legendgroup="oom",
+            ))
+            oom_legend_added = True
 
     fig.update_layout(
         title=f"Peak GPU Memory Usage (D={dim}, k={k})",
