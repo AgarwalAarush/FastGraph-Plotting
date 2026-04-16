@@ -818,6 +818,138 @@ def plot_memory_footprint(
     return fig
 
 
+def plot_recall_speed_pareto(
+    points: int = 500_000, k: int = 40
+) -> go.Figure:
+    """
+    Scatter plot: recall vs time for all algorithms and parameter configs.
+    Each dot is one (algorithm, param) config at a given (dim, points, k).
+    FGC sits at recall=1.0; approximate methods trace out a Pareto curve.
+    Shows d=3 and d=5 side by side.
+    """
+    dims = [3, 5]
+    fig = make_subplots(
+        rows=1, cols=len(dims),
+        subplot_titles=[f"D={d}, N={points:,}, k={k}" for d in dims],
+        shared_yaxes=True,
+        horizontal_spacing=0.08,
+    )
+
+    for col_idx, dim in enumerate(dims, start=1):
+        for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+            df = _load_recall_csv(backend)
+            if df.empty:
+                continue
+            sub = df[(df["dim"] == dim) & (df["points"] == points) & (df["k"] == k)]
+            if sub.empty:
+                continue
+
+            meta = ALGO_DISPLAY[backend]
+
+            if backend in ("fgc", "faiss"):
+                # Single point: exact recall
+                mean_r = sub["recall"].mean()
+                mean_t = sub["time_ms"].mean()
+                fig.add_trace(go.Scatter(
+                    x=[mean_r], y=[mean_t],
+                    mode="markers+text",
+                    marker=dict(color=meta["color"], size=14, symbol="star"),
+                    text=[meta["name"]],
+                    textposition="top center",
+                    name=meta["name"],
+                    showlegend=(col_idx == 1),
+                ), row=1, col=col_idx)
+            else:
+                # Multiple param configs → scatter points connected by line
+                param_col = "itopk_size" if backend == "cuvs" else "tau_query"
+                if param_col not in sub.columns:
+                    continue
+                grouped = sub.groupby(param_col).agg(
+                    mean_recall=("recall", "mean"),
+                    mean_time=("time_ms", "mean"),
+                ).reset_index().sort_values("mean_recall")
+                fig.add_trace(go.Scatter(
+                    x=grouped["mean_recall"],
+                    y=grouped["mean_time"],
+                    mode="markers+lines+text",
+                    marker=dict(color=meta["color"], size=10),
+                    line=dict(color=meta["color"], dash="dot"),
+                    text=[f"{p:.0f}" if backend == "cuvs" else f"{p:.2f}"
+                          for p in grouped[param_col]],
+                    textposition="top right",
+                    textfont=dict(size=9),
+                    name=meta["name"],
+                    showlegend=(col_idx == 1),
+                ), row=1, col=col_idx)
+
+    fig.update_xaxes(title_text="Recall", range=[0, 1.08])
+    fig.update_yaxes(title_text="Time (ms)", type="log", row=1, col=1)
+    fig.update_yaxes(type="log", row=1, col=2)
+    fig.update_layout(
+        title=f"Recall vs Speed Pareto Front (N={points:,}, k={k})",
+        font=dict(family="Arial", size=14),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+def plot_recall_vs_dimension(
+    points: int = 100_000, k: int = 40
+) -> go.Figure:
+    """
+    Line plot: recall vs dimension for each algorithm at their best param config.
+    Shows FGC at 1.0 everywhere while cuVS/GGNN collapse at higher dims.
+    """
+    fig = go.Figure()
+
+    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+        df = _load_recall_csv(backend)
+        if df.empty:
+            continue
+        sub = df[(df["points"] == points) & (df["k"] == k)]
+        if sub.empty:
+            continue
+
+        meta = ALGO_DISPLAY[backend]
+
+        if backend in ("fgc", "faiss"):
+            grouped = sub.groupby("dim").agg(mean_recall=("recall", "mean")).reset_index()
+        elif backend == "cuvs":
+            # Use best (highest-recall) itopk_size per dim
+            best = sub.groupby(["dim", "itopk_size"]).agg(
+                mean_recall=("recall", "mean")).reset_index()
+            grouped = best.loc[best.groupby("dim")["mean_recall"].idxmax()][["dim", "mean_recall"]]
+        elif backend == "ggnn":
+            best = sub.groupby(["dim", "tau_query"]).agg(
+                mean_recall=("recall", "mean")).reset_index()
+            grouped = best.loc[best.groupby("dim")["mean_recall"].idxmax()][["dim", "mean_recall"]]
+
+        grouped = grouped.sort_values("dim")
+        fig.add_trace(go.Scatter(
+            x=grouped["dim"],
+            y=grouped["mean_recall"],
+            mode="lines+markers",
+            marker=dict(color=meta["color"], size=8),
+            line=dict(color=meta["color"], width=2),
+            name=meta["name"],
+        ))
+
+    fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
+    fig.update_layout(
+        title=f"Recall vs Dimension at Best Quality (N={points:,}, k={k})",
+        xaxis_title="Dimensions",
+        yaxis_title="Recall (distance-based)",
+        yaxis=dict(range=[0, 1.08]),
+        font=dict(family="Arial", size=14),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
 def create_plots() -> None:
     print("\n" + "=" * 60)
     print("Creating GPU Performance Analysis Plots")
@@ -892,6 +1024,16 @@ def create_plots() -> None:
     fig9 = plot_memory_footprint(dim=3, k=40)
     if fig9.data:
         save_figure(fig9, os.path.join(PLOTS_DIR, "memory_footprint.png"), 900, 500)
+
+    print("\n10. Creating recall vs speed Pareto front...")
+    fig10 = plot_recall_speed_pareto(points=500_000, k=40)
+    if fig10.data:
+        save_figure(fig10, os.path.join(PLOTS_DIR, "recall_speed_pareto.png"), 1400, 600)
+
+    print("\n11. Creating recall vs dimension (robustness)...")
+    fig11 = plot_recall_vs_dimension(points=100_000, k=40)
+    if fig11.data:
+        save_figure(fig11, os.path.join(PLOTS_DIR, "recall_vs_dimension.png"), 900, 500)
 
     print("\n" + "=" * 60)
     print("GPU Plot Generation Complete! Generated files:")
