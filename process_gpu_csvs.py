@@ -314,14 +314,14 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
         k = kwargs.get("k", 40)
         max_dimensions = kwargs.get("max_dimensions", 15)
 
-        subtitle_left = f"Standard View (d ≤ {max_dimensions})"
-        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        subtitle_left = f"Full Scale (d ≤ {max_dimensions})"
+        subtitle_right = f"Detail View (y ≤ {y_axis_cap} ms)"
         main_title = f"GPU-only FGC Dimensional Scaling Analysis ({size//1_000_000}M Vectors, K={k})"
     else:
         dimension = kwargs.get("dimension", 3)
         k = kwargs.get("k", 40)
-        subtitle_left = "Standard View"
-        subtitle_right = f"Zoomed View (Y-Axis Capped at {y_axis_cap})"
+        subtitle_left = "Full Scale"
+        subtitle_right = f"Detail View (y ≤ {y_axis_cap} ms)"
         main_title = f"GPU-only FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
 
     fig = make_subplots(
@@ -598,20 +598,29 @@ def plot_recall_exactness(
     dim: int = 3, points: int = 500_000, k: int = 40
 ) -> go.Figure:
     """
-    Bar chart: recall@k for each algorithm at a fixed (dim, points, k) combo.
-    FGC and FAISS should show recall=1.0 (exact); cuVS/GGNN show their default-param recall.
-    cuVS default: itopk_size=128. GGNN default: tau_query=0.64.
+    Bar chart: distance-based recall@k for FGC vs approximate methods.
+    FGC achieves recall=1.0 (exact); cuVS/GGNN show their best-param recall.
+    FAISS is excluded: it is also exact but uses BLAS-based distances internally,
+    causing a measurement artifact vs element-wise ground truth (see NOTES.md).
     """
     bars = []
-    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+    for backend in ["fgc", "cuvs", "ggnn"]:
         df = _load_recall_csv(backend)
         if df.empty:
             continue
         sub = df[(df["dim"] == dim) & (df["points"] == points) & (df["k"] == k)]
         if backend == "cuvs":
-            sub = sub[sub["itopk_size"] == 128]
+            # Use best (highest-recall) itopk_size
+            if "itopk_size" in sub.columns:
+                best = sub.groupby("itopk_size")["recall"].mean()
+                best_param = best.idxmax()
+                sub = sub[sub["itopk_size"] == best_param]
         elif backend == "ggnn":
-            sub = sub[sub["tau_query"] == 0.64]
+            # Use best (highest-recall) tau_query
+            if "tau_query" in sub.columns:
+                best = sub.groupby("tau_query")["recall"].mean()
+                best_param = best.idxmax()
+                sub = sub[sub["tau_query"] == best_param]
         if sub.empty:
             continue
         mean_recall = sub["recall"].mean()
@@ -623,17 +632,18 @@ def plot_recall_exactness(
         fig.add_trace(go.Bar(
             x=[name], y=[recall],
             marker_color=color,
-            text=[f"{recall:.4f}"],
+            text=[f"{recall:.3f}"],
             textposition="outside",
+            textfont=dict(size=14),
             name=name,
         ))
     fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
-                  annotation_text="Exact (recall = 1.0)", annotation_position="top right")
+                  annotation_text="Exact", annotation_position="top right")
     fig.update_layout(
-        title=f"Recall@{k} vs Brute-Force Ground Truth (D={dim}, N={points:,})",
+        title=f"FGC Achieves Exact Recall vs Approximate Methods (D={dim}, N={points:,}, k={k})",
         xaxis_title="Algorithm",
-        yaxis_title=f"Recall@{k}",
-        yaxis=dict(range=[0, 1.12]),
+        yaxis_title=f"Distance-Based Recall@{k}",
+        yaxis=dict(range=[0, 1.12], gridcolor="lightgray", gridwidth=1),
         showlegend=False,
         font=dict(family="Arial", size=14),
         plot_bgcolor="white",
@@ -709,13 +719,15 @@ def plot_recall_controlled_speed(
             ), row=1, col=col_idx)
 
     fig.update_layout(
-        title=f"Speed at ≥{int(target_recall*100)}% Recall (N={points:,}, k={k})",
+        title=f"Speed at ≥{int(target_recall*100)}% Recall (N={points:,}, k={k})<br>"
+              f"<sub>Approximate methods use their best config meeting the recall target (or best available)</sub>",
         yaxis_title="Time (ms)",
+        yaxis=dict(gridcolor="lightgray"),
         barmode="group",
         font=dict(family="Arial", size=14),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
     )
     return fig
 
@@ -732,8 +744,8 @@ def plot_memory_footprint(
     if df_all.empty:
         return go.Figure()
 
-    sizes = [100_000, 1_000_000, 5_000_000]
-    size_labels = ["100k", "1M", "5M"]
+    sizes = [500_000, 1_000_000, 5_000_000]
+    size_labels = ["500k", "1M", "5M"]
 
     # Find max y for OOM bar height
     max_mem = 0.0
@@ -806,14 +818,16 @@ def plot_memory_footprint(
             oom_legend_added = True
 
     fig.update_layout(
-        title=f"Peak GPU Memory Usage (D={dim}, k={k})",
+        title=f"Peak GPU Memory Usage (D={dim}, k={k})<br>"
+              f"<sub>Measured via pynvml device-level memory delta (cross-allocator)</sub>",
         xaxis_title="Dataset Size",
         yaxis_title="Peak GPU Memory (MB)",
+        yaxis=dict(gridcolor="lightgray"),
         barmode="group",
         font=dict(family="Arial", size=14),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
     )
     return fig
 
@@ -823,20 +837,25 @@ def plot_recall_speed_pareto(
 ) -> go.Figure:
     """
     Scatter plot: recall vs time for all algorithms and parameter configs.
-    Each dot is one (algorithm, param) config at a given (dim, points, k).
-    FGC sits at recall=1.0; approximate methods trace out a Pareto curve.
-    Shows d=3 and d=5 side by side.
+    FGC sits at recall=1.0; approximate methods trace Pareto curves.
+    Each approximate method's points represent different quality parameters:
+    - cuVS: itopk_size (internal candidate list size, higher = better recall)
+    - GGNN: tau_query (search quality threshold, higher = better recall)
     """
     dims = [3, 5]
     fig = make_subplots(
         rows=1, cols=len(dims),
         subplot_titles=[f"D={d}, N={points:,}, k={k}" for d in dims],
         shared_yaxes=True,
-        horizontal_spacing=0.08,
+        horizontal_spacing=0.12,
     )
 
     for col_idx, dim in enumerate(dims, start=1):
-        for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+        # Add vertical line at recall=1.0
+        fig.add_vline(x=1.0, line_dash="dash", line_color="lightgray",
+                      row=1, col=col_idx)
+
+        for backend in ["fgc", "cuvs", "ggnn"]:
             df = _load_recall_csv(backend)
             if df.empty:
                 continue
@@ -846,51 +865,56 @@ def plot_recall_speed_pareto(
 
             meta = ALGO_DISPLAY[backend]
 
-            if backend in ("fgc", "faiss"):
-                # Single point: exact recall
+            if backend == "fgc":
                 mean_r = sub["recall"].mean()
                 mean_t = sub["time_ms"].mean()
                 fig.add_trace(go.Scatter(
                     x=[mean_r], y=[mean_t],
-                    mode="markers+text",
-                    marker=dict(color=meta["color"], size=14, symbol="star"),
-                    text=[meta["name"]],
-                    textposition="top center",
-                    name=meta["name"],
+                    mode="markers",
+                    marker=dict(color=meta["color"], size=16, symbol="star",
+                                line=dict(width=2, color="black")),
+                    name=f"{meta['name']} (exact)",
                     showlegend=(col_idx == 1),
+                    hovertemplate=f"{meta['name']}<br>recall=%{{x:.4f}}<br>time=%{{y:.0f}}ms",
                 ), row=1, col=col_idx)
             else:
-                # Multiple param configs → scatter points connected by line
                 param_col = "itopk_size" if backend == "cuvs" else "tau_query"
+                param_label = "itopk" if backend == "cuvs" else "τ"
                 if param_col not in sub.columns:
                     continue
                 grouped = sub.groupby(param_col).agg(
                     mean_recall=("recall", "mean"),
                     mean_time=("time_ms", "mean"),
                 ).reset_index().sort_values("mean_recall")
+                labels = [f"{param_label}={p:.0f}" if backend == "cuvs"
+                          else f"{param_label}={p:.2f}"
+                          for p in grouped[param_col]]
                 fig.add_trace(go.Scatter(
                     x=grouped["mean_recall"],
                     y=grouped["mean_time"],
                     mode="markers+lines+text",
                     marker=dict(color=meta["color"], size=10),
-                    line=dict(color=meta["color"], dash="dot"),
-                    text=[f"{p:.0f}" if backend == "cuvs" else f"{p:.2f}"
-                          for p in grouped[param_col]],
+                    line=dict(color=meta["color"], width=2),
+                    text=labels,
                     textposition="top right",
-                    textfont=dict(size=9),
+                    textfont=dict(size=10),
                     name=meta["name"],
                     showlegend=(col_idx == 1),
+                    hovertemplate=f"{meta['name']}<br>recall=%{{x:.4f}}<br>time=%{{y:.0f}}ms",
                 ), row=1, col=col_idx)
 
-    fig.update_xaxes(title_text="Recall", range=[0, 1.08])
-    fig.update_yaxes(title_text="Time (ms)", type="log", row=1, col=1)
-    fig.update_yaxes(type="log", row=1, col=2)
+    fig.update_xaxes(title_text="Distance-Based Recall@k", range=[0, 1.08],
+                     gridcolor="lightgray", gridwidth=1)
+    fig.update_yaxes(title_text="Query Time (ms)", type="log",
+                     gridcolor="lightgray", gridwidth=1, row=1, col=1)
+    fig.update_yaxes(type="log", gridcolor="lightgray", gridwidth=1, row=1, col=2)
     fig.update_layout(
-        title=f"Recall vs Speed Pareto Front (N={points:,}, k={k})",
+        title=f"Recall vs Speed Tradeoff (N={points:,}, k={k})<br>"
+              f"<sub>Each point = a quality parameter setting. Higher quality → better recall but slower.</sub>",
         font=dict(family="Arial", size=14),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
     )
     return fig
 
@@ -901,27 +925,31 @@ def plot_recall_vs_dimension(
     """
     Line plot: recall vs dimension for each algorithm at their best param config.
     Shows FGC at 1.0 everywhere while cuVS/GGNN collapse at higher dims.
+    OOM/error dims are shown as red '×' markers.
     """
     fig = go.Figure()
+    all_dims = list(range(2, 11))
 
-    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
+    for backend in ["fgc", "cuvs", "ggnn"]:
+        meta = ALGO_DISPLAY[backend]
+
+        # Load ok data
         df = _load_recall_csv(backend)
         if df.empty:
             continue
         sub = df[(df["points"] == points) & (df["k"] == k)]
-        if sub.empty:
-            continue
 
-        meta = ALGO_DISPLAY[backend]
-
-        if backend in ("fgc", "faiss"):
+        if backend == "fgc":
             grouped = sub.groupby("dim").agg(mean_recall=("recall", "mean")).reset_index()
         elif backend == "cuvs":
-            # Use best (highest-recall) itopk_size per dim
+            if "itopk_size" not in sub.columns:
+                continue
             best = sub.groupby(["dim", "itopk_size"]).agg(
                 mean_recall=("recall", "mean")).reset_index()
             grouped = best.loc[best.groupby("dim")["mean_recall"].idxmax()][["dim", "mean_recall"]]
         elif backend == "ggnn":
+            if "tau_query" not in sub.columns:
+                continue
             best = sub.groupby(["dim", "tau_query"]).agg(
                 mean_recall=("recall", "mean")).reset_index()
             grouped = best.loc[best.groupby("dim")["mean_recall"].idxmax()][["dim", "mean_recall"]]
@@ -931,21 +959,44 @@ def plot_recall_vs_dimension(
             x=grouped["dim"],
             y=grouped["mean_recall"],
             mode="lines+markers",
-            marker=dict(color=meta["color"], size=8),
-            line=dict(color=meta["color"], width=2),
+            marker=dict(color=meta["color"], size=9),
+            line=dict(color=meta["color"], width=2.5),
             name=meta["name"],
         ))
 
+        # Check for OOM/error dims — show as red '×'
+        ok_dims = set(grouped["dim"].astype(int).tolist())
+        # Load ALL data including errors to find which dims failed
+        dist_path = os.path.join(RECALL_DATA_DIR, f"recall_dist_{backend}.csv")
+        if os.path.exists(dist_path):
+            df_all = pd.read_csv(dist_path)
+            err_sub = df_all[(df_all["points"] == points) & (df_all["k"] == k) & (df_all["status"] == "error")]
+            err_dims = set(err_sub["dim"].astype(int).tolist()) - ok_dims
+            if err_dims:
+                fig.add_trace(go.Scatter(
+                    x=sorted(err_dims),
+                    y=[0.02] * len(err_dims),
+                    mode="markers+text",
+                    marker=dict(color="red", size=12, symbol="x"),
+                    text=["OOM"] * len(err_dims),
+                    textposition="top center",
+                    textfont=dict(size=9, color="red"),
+                    name=f"{meta['name']} (OOM)",
+                    showlegend=False,
+                ))
+
     fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
     fig.update_layout(
-        title=f"Recall vs Dimension at Best Quality (N={points:,}, k={k})",
+        title=f"Recall vs Dimension at Best Quality Setting (N={points:,}, k={k})<br>"
+              f"<sub>FGC is exact across all dimensions; approximate methods degrade at higher d</sub>",
         xaxis_title="Dimensions",
-        yaxis_title="Recall (distance-based)",
-        yaxis=dict(range=[0, 1.08]),
+        xaxis=dict(dtick=1, range=[1.5, 10.5], gridcolor="lightgray"),
+        yaxis_title="Distance-Based Recall@k",
+        yaxis=dict(range=[-0.02, 1.08], gridcolor="lightgray"),
         font=dict(family="Arial", size=14),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
     )
     return fig
 
