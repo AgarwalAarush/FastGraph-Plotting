@@ -552,16 +552,32 @@ ALGO_DISPLAY = {
 
 
 def _load_recall_csv(backend: str) -> pd.DataFrame:
-    path = os.path.join(RECALL_DATA_DIR, f"recall_{backend}.csv")
-    if not os.path.exists(path):
-        print(f"Missing: {path}")
-        return pd.DataFrame()
-    df = pd.read_csv(path)
-    df = df[df["status"] == "ok"].copy()
-    for col in ["dim", "points", "k", "time_ms", "recall"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    """Load recall data, preferring recall_dist_*.csv (element-wise L2) over recall_*.csv."""
+    # Prefer distance-based recall (correct for tie-breaking + float precision)
+    dist_path = os.path.join(RECALL_DATA_DIR, f"recall_dist_{backend}.csv")
+    old_path = os.path.join(RECALL_DATA_DIR, f"recall_{backend}.csv")
+
+    if os.path.exists(dist_path):
+        df = pd.read_csv(dist_path)
+        df = df[df["status"] == "ok"].copy()
+        # Normalize: use recall_dist as the "recall" column
+        if "recall_dist" in df.columns:
+            df["recall"] = df["recall_dist"]
+        for col in ["dim", "points", "k", "time_ms", "recall"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+
+    if os.path.exists(old_path):
+        df = pd.read_csv(old_path)
+        df = df[df["status"] == "ok"].copy()
+        for col in ["dim", "points", "k", "time_ms", "recall"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+
+    print(f"Missing recall data for {backend}")
+    return pd.DataFrame()
 
 
 def _load_memory_csv(include_errors: bool = False) -> pd.DataFrame:
