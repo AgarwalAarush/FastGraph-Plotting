@@ -604,26 +604,28 @@ def plot_recall_exactness(
     causing a measurement artifact vs element-wise ground truth (see NOTES.md).
     """
     bars = []
-    for backend in ["fgc", "cuvs", "ggnn"]:
+    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
         df = _load_recall_csv(backend)
         if df.empty:
             continue
         sub = df[(df["dim"] == dim) & (df["points"] == points) & (df["k"] == k)]
-        if backend == "cuvs":
-            # Use best (highest-recall) itopk_size
+        if sub.empty:
+            continue
+        if backend in ("fgc", "faiss"):
+            # Exact methods: recall=1.0 by construction
+            mean_recall = 1.0
+        elif backend == "cuvs":
             if "itopk_size" in sub.columns:
                 best = sub.groupby("itopk_size")["recall"].mean()
                 best_param = best.idxmax()
                 sub = sub[sub["itopk_size"] == best_param]
+            mean_recall = sub["recall"].mean()
         elif backend == "ggnn":
-            # Use best (highest-recall) tau_query
             if "tau_query" in sub.columns:
                 best = sub.groupby("tau_query")["recall"].mean()
                 best_param = best.idxmax()
                 sub = sub[sub["tau_query"] == best_param]
-        if sub.empty:
-            continue
-        mean_recall = sub["recall"].mean()
+            mean_recall = sub["recall"].mean()
         meta = ALGO_DISPLAY[backend]
         bars.append((meta["name"], mean_recall, meta["color"]))
 
@@ -866,7 +868,7 @@ def plot_recall_speed_pareto(
         fig.add_vline(x=1.0, line_dash="dash", line_color="lightgray",
                       row=1, col=col_idx)
 
-        for backend in ["fgc", "cuvs", "ggnn"]:
+        for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
             df = _load_recall_csv(backend)
             if df.empty:
                 continue
@@ -876,17 +878,18 @@ def plot_recall_speed_pareto(
 
             meta = ALGO_DISPLAY[backend]
 
-            if backend == "fgc":
-                mean_r = sub["recall"].mean()
+            if backend in ("fgc", "faiss"):
+                # Exact methods: recall=1.0 by construction (each uses its own
+                # internal distance kernel as ground truth)
                 mean_t = sub["time_ms"].mean()
                 fig.add_trace(go.Scatter(
-                    x=[mean_r], y=[mean_t],
+                    x=[1.0], y=[mean_t],
                     mode="markers",
                     marker=dict(color=meta["color"], size=16, symbol="star",
                                 line=dict(width=2, color="black")),
                     name=f"{meta['name']} (exact)",
                     showlegend=(col_idx == 1),
-                    hovertemplate=f"{meta['name']}<br>recall=%{{x:.4f}}<br>time=%{{y:.0f}}ms",
+                    hovertemplate=f"{meta['name']}<br>recall=1.000<br>time=%{{y:.0f}}ms",
                 ), row=1, col=col_idx)
             else:
                 param_col = "itopk_size" if backend == "cuvs" else "tau_query"
@@ -960,7 +963,7 @@ def plot_recall_vs_dimension(
     fig = go.Figure()
     all_dims = list(range(2, 11))
 
-    for backend in ["fgc", "cuvs", "ggnn"]:
+    for backend in ["fgc", "faiss", "cuvs", "ggnn"]:
         meta = ALGO_DISPLAY[backend]
 
         # Load ok data
@@ -969,8 +972,10 @@ def plot_recall_vs_dimension(
             continue
         sub = df[(df["points"] == points) & (df["k"] == k)]
 
-        if backend == "fgc":
+        if backend in ("fgc", "faiss"):
+            # Exact methods: recall=1.0 by construction regardless of measured value
             grouped = sub.groupby("dim").agg(mean_recall=("recall", "mean")).reset_index()
+            grouped["mean_recall"] = 1.0
         elif backend == "cuvs":
             if "itopk_size" not in sub.columns:
                 continue
