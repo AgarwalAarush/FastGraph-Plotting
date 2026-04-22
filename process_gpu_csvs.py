@@ -315,13 +315,13 @@ def plot_side_by_side_with_zoom(data: pd.DataFrame, analysis_type: str, **kwargs
         max_dimensions = kwargs.get("max_dimensions", 15)
 
         subtitle_left = f"Full Scale (d ≤ {max_dimensions})"
-        subtitle_right = f"Detail View (y ≤ {y_axis_cap} ms)"
+        subtitle_right = f"Detail View (speedup ≤ {y_axis_cap}×)"
         main_title = f"GPU-only FGC Dimensional Scaling Analysis ({size//1_000_000}M Vectors, K={k})"
     else:
         dimension = kwargs.get("dimension", 3)
         k = kwargs.get("k", 40)
         subtitle_left = "Full Scale"
-        subtitle_right = f"Detail View (y ≤ {y_axis_cap} ms)"
+        subtitle_right = f"Detail View (speedup ≤ {y_axis_cap}×)"
         main_title = f"GPU-only FGC Speedup Analysis: D={dimension}, K={k}, Varying Sizes"
 
     fig = make_subplots(
@@ -640,14 +640,16 @@ def plot_recall_exactness(
     fig.add_hline(y=1.0, line_dash="dash", line_color="gray",
                   annotation_text="Exact", annotation_position="top right")
     fig.update_layout(
-        title=f"FGC Achieves Exact Recall vs Approximate Methods (D={dim}, N={points:,}, k={k})",
+        title=f"FGC Achieves Exact Recall vs Approximate Methods<br>"
+              f"<sub>D={dim}, N={points:,}, k={k}. Approximate methods shown at their best quality setting.</sub>",
         xaxis_title="Algorithm",
         yaxis_title=f"Distance-Based Recall@{k}",
-        yaxis=dict(range=[0, 1.12], gridcolor="lightgray", gridwidth=1),
+        yaxis=dict(range=[0, 1.15], gridcolor="lightgray", gridwidth=1),
         showlegend=False,
-        font=dict(family="Arial", size=14),
+        font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
+        margin=dict(t=100, b=70, l=80, r=40),
     )
     return fig
 
@@ -719,15 +721,18 @@ def plot_recall_controlled_speed(
             ), row=1, col=col_idx)
 
     fig.update_layout(
-        title=f"Speed at ≥{int(target_recall*100)}% Recall (N={points:,}, k={k})<br>"
-              f"<sub>Approximate methods use their best config meeting the recall target (or best available)</sub>",
+        title=f"Query Speed Comparison (N={points:,}, k={k})<br>"
+              f"<sub>Approximate methods shown at their highest achievable recall (annotated). "
+              f"None reach {int(target_recall*100)}% recall at these settings.</sub>",
         yaxis_title="Time (ms)",
         yaxis=dict(gridcolor="lightgray"),
         barmode="group",
-        font=dict(family="Arial", size=14),
+        font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
+        margin=dict(t=110, b=70, l=80, r=40),
     )
     return fig
 
@@ -819,15 +824,17 @@ def plot_memory_footprint(
 
     fig.update_layout(
         title=f"Peak GPU Memory Usage (D={dim}, k={k})<br>"
-              f"<sub>Measured via pynvml device-level memory delta (cross-allocator)</sub>",
+              f"<sub>Measured via device-level memory delta (cross-allocator, includes all GPU frameworks)</sub>",
         xaxis_title="Dataset Size",
         yaxis_title="Peak GPU Memory (MB)",
         yaxis=dict(gridcolor="lightgray"),
         barmode="group",
-        font=dict(family="Arial", size=14),
+        font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
+        margin=dict(t=110, b=70, l=80, r=40),
     )
     return fig
 
@@ -886,9 +893,15 @@ def plot_recall_speed_pareto(
                     mean_recall=("recall", "mean"),
                     mean_time=("time_ms", "mean"),
                 ).reset_index().sort_values("mean_recall")
-                labels = [f"{param_label}={p:.0f}" if backend == "cuvs"
-                          else f"{param_label}={p:.2f}"
-                          for p in grouped[param_col]]
+                raw_labels = [f"{param_label}={p:.0f}" if backend == "cuvs"
+                              else f"{param_label}={p:.2f}"
+                              for p in grouped[param_col]]
+                # Suppress labels when recall range is too compressed to avoid overlap
+                recall_range = grouped["mean_recall"].max() - grouped["mean_recall"].min()
+                if recall_range < 0.05:
+                    labels = [""] * len(raw_labels)
+                else:
+                    labels = raw_labels
                 fig.add_trace(go.Scatter(
                     x=grouped["mean_recall"],
                     y=grouped["mean_time"],
@@ -905,16 +918,26 @@ def plot_recall_speed_pareto(
 
     fig.update_xaxes(title_text="Distance-Based Recall@k", range=[0, 1.08],
                      gridcolor="lightgray", gridwidth=1)
-    fig.update_yaxes(title_text="Query Time (ms)", type="log",
+    fig.update_yaxes(title_text="Query Time (ms)", rangemode="tozero",
                      gridcolor="lightgray", gridwidth=1, row=1, col=1)
-    fig.update_yaxes(type="log", gridcolor="lightgray", gridwidth=1, row=1, col=2)
+    fig.update_yaxes(rangemode="tozero", gridcolor="lightgray", gridwidth=1, row=1, col=2)
     fig.update_layout(
-        title=f"Recall vs Speed Tradeoff (N={points:,}, k={k})<br>"
-              f"<sub>Each point = a quality parameter setting. Higher quality → better recall but slower.</sub>",
-        font=dict(family="Arial", size=14),
+        title=f"Recall vs Speed Tradeoff (N={points:,}, k={k})",
+        font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
+        margin=dict(t=100, b=100, l=80, r=40),
+    )
+    fig.add_annotation(
+        text="Each marker represents one quality-parameter configuration. "
+             "Higher parameter values improve recall at the cost of increased query time.",
+        xref="paper", yref="paper",
+        x=0.5, y=-0.18,
+        showarrow=False,
+        font=dict(size=12, color="gray", family="Arial"),
+        align="center",
     )
     return fig
 
@@ -964,39 +987,45 @@ def plot_recall_vs_dimension(
             name=meta["name"],
         ))
 
-        # Check for OOM/error dims — show as red '×'
+        # Check for OOM/error dims — show as per-algorithm '×'
         ok_dims = set(grouped["dim"].astype(int).tolist())
-        # Load ALL data including errors to find which dims failed
         dist_path = os.path.join(RECALL_DATA_DIR, f"recall_dist_{backend}.csv")
         if os.path.exists(dist_path):
             df_all = pd.read_csv(dist_path)
             err_sub = df_all[(df_all["points"] == points) & (df_all["k"] == k) & (df_all["status"] == "error")]
             err_dims = set(err_sub["dim"].astype(int).tolist()) - ok_dims
             if err_dims:
+                sorted_err = sorted(err_dims)
+                # Only label the first marker to avoid overlap; color identifies the algorithm
+                labels = ["OOM"] + [""] * (len(sorted_err) - 1)
                 fig.add_trace(go.Scatter(
-                    x=sorted(err_dims),
-                    y=[0.02] * len(err_dims),
+                    x=sorted_err,
+                    y=[0.02] * len(sorted_err),
                     mode="markers+text",
-                    marker=dict(color="red", size=12, symbol="x"),
-                    text=["OOM"] * len(err_dims),
+                    marker=dict(color=meta["color"], size=13, symbol="x",
+                                line=dict(width=2, color=meta["color"])),
+                    text=labels,
                     textposition="top center",
-                    textfont=dict(size=9, color="red"),
+                    textfont=dict(size=11, color=meta["color"]),
                     name=f"{meta['name']} (OOM)",
-                    showlegend=False,
+                    showlegend=True,
                 ))
 
     fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
     fig.update_layout(
         title=f"Recall vs Dimension at Best Quality Setting (N={points:,}, k={k})<br>"
-              f"<sub>FGC is exact across all dimensions; approximate methods degrade at higher d</sub>",
+              f"<sub>FGC is exact across all dimensions; approximate methods degrade at higher d. "
+              f"Cross markers indicate out-of-memory failure.</sub>",
         xaxis_title="Dimensions",
         xaxis=dict(dtick=1, range=[1.5, 10.5], gridcolor="lightgray"),
         yaxis_title="Distance-Based Recall@k",
-        yaxis=dict(range=[-0.02, 1.08], gridcolor="lightgray"),
-        font=dict(family="Arial", size=14),
+        yaxis=dict(range=[-0.05, 1.12], gridcolor="lightgray"),
+        font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
+        margin=dict(t=110, b=70, l=80, r=40),
     )
     return fig
 
