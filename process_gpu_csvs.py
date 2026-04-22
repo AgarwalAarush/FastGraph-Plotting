@@ -644,7 +644,9 @@ def plot_recall_exactness(
               f"<sub>D={dim}, N={points:,}, k={k}. Approximate methods shown at their best quality setting.</sub>",
         xaxis_title="Algorithm",
         yaxis_title=f"Distance-Based Recall@{k}",
-        yaxis=dict(range=[0, 1.15], gridcolor="lightgray", gridwidth=1),
+        yaxis=dict(range=[0, 1.15], gridcolor="lightgray", gridwidth=1,
+                   showline=True, linecolor="#444", linewidth=1),
+        xaxis=dict(showline=True, linecolor="#444", linewidth=1),
         showlegend=False,
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
@@ -725,7 +727,8 @@ def plot_recall_controlled_speed(
               f"<sub>Approximate methods shown at their highest achievable recall (annotated). "
               f"None reach {int(target_recall*100)}% recall at these settings.</sub>",
         yaxis_title="Time (ms)",
-        yaxis=dict(gridcolor="lightgray"),
+        yaxis=dict(gridcolor="lightgray", showline=True, linecolor="#444", linewidth=1),
+        xaxis=dict(showline=True, linecolor="#444", linewidth=1),
         barmode="group",
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
@@ -827,7 +830,8 @@ def plot_memory_footprint(
               f"<sub>Measured via device-level memory delta (cross-allocator, includes all GPU frameworks)</sub>",
         xaxis_title="Dataset Size",
         yaxis_title="Peak GPU Memory (MB)",
-        yaxis=dict(gridcolor="lightgray"),
+        yaxis=dict(gridcolor="lightgray", showline=True, linecolor="#444", linewidth=1),
+        xaxis=dict(showline=True, linecolor="#444", linewidth=1),
         barmode="group",
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
@@ -917,10 +921,13 @@ def plot_recall_speed_pareto(
                 ), row=1, col=col_idx)
 
     fig.update_xaxes(title_text="Distance-Based Recall@k", range=[0, 1.08],
-                     gridcolor="lightgray", gridwidth=1)
+                     gridcolor="lightgray", gridwidth=1,
+                     showline=True, linecolor="#444", linewidth=1)
     fig.update_yaxes(title_text="Query Time (ms)", rangemode="tozero",
-                     gridcolor="lightgray", gridwidth=1, row=1, col=1)
-    fig.update_yaxes(rangemode="tozero", gridcolor="lightgray", gridwidth=1, row=1, col=2)
+                     gridcolor="lightgray", gridwidth=1,
+                     showline=True, linecolor="#444", linewidth=1, row=1, col=1)
+    fig.update_yaxes(rangemode="tozero", gridcolor="lightgray", gridwidth=1,
+                     showline=True, linecolor="#444", linewidth=1, row=1, col=2)
     fig.update_layout(
         title=f"Recall vs Speed Tradeoff (N={points:,}, k={k})",
         font=dict(family="Arial", size=16),
@@ -1017,9 +1024,11 @@ def plot_recall_vs_dimension(
               f"<sub>FGC is exact across all dimensions; approximate methods degrade at higher d. "
               f"Cross markers indicate out-of-memory failure.</sub>",
         xaxis_title="Dimensions",
-        xaxis=dict(dtick=1, range=[1.5, 10.5], gridcolor="lightgray"),
+        xaxis=dict(dtick=1, range=[1.5, 10.5], gridcolor="lightgray",
+                   showline=True, linecolor="#444", linewidth=1),
         yaxis_title="Distance-Based Recall@k",
-        yaxis=dict(range=[-0.05, 1.12], gridcolor="lightgray"),
+        yaxis=dict(range=[-0.05, 1.12], gridcolor="lightgray",
+                   showline=True, linecolor="#444", linewidth=1),
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
