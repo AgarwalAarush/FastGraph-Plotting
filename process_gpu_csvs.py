@@ -201,12 +201,20 @@ def plot_fgc_speedup_analysis(
         if valid_data.empty:
             continue
 
-        speedup = valid_data[time_col] / valid_data[FGC_TIME_COLUMN]
+        # Aggregate to mean speedup per x value (avoids cartesian-product scatter
+        # from the outer-join merge producing many rows per config)
+        valid_data["speedup"] = valid_data[time_col] / valid_data[FGC_TIME_COLUMN]
+        plot_data = (
+            valid_data.groupby(x_col)["speedup"]
+            .mean()
+            .reset_index()
+            .sort_values(x_col)
+        )
 
         fig.add_trace(
             go.Scatter(
-                x=valid_data[x_col],
-                y=speedup,
+                x=plot_data[x_col],
+                y=plot_data["speedup"],
                 mode="lines+markers",
                 name=alg_info["display_name"],
                 line=dict(color=alg_info["color"], width=3),
@@ -735,9 +743,9 @@ def plot_recall_controlled_speed(
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
-        margin=dict(t=110, b=70, l=80, r=40),
+        margin=dict(t=110, b=110, l=80, r=40),
     )
     return fig
 
@@ -1037,9 +1045,9 @@ def plot_recall_vs_dimension(
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
-        margin=dict(t=110, b=70, l=80, r=40),
+        margin=dict(t=100, b=120, l=80, r=40),
     )
     return fig
 
