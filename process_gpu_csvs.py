@@ -1045,9 +1045,9 @@ def plot_recall_vs_dimension(
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
-        margin=dict(t=100, b=120, l=80, r=40),
+        margin=dict(t=100, b=140, l=80, r=40),
     )
     return fig
 
