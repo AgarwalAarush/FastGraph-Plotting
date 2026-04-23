@@ -733,9 +733,7 @@ def plot_recall_controlled_speed(
             ), row=1, col=col_idx)
 
     fig.update_layout(
-        title=f"Query Speed Comparison (N={points:,}, k={k})<br>"
-              f"<sub>Approximate methods shown at their highest achievable recall (annotated). "
-              f"None reach {int(target_recall*100)}% recall at these settings.</sub>",
+        title=f"Query Speed Comparison (N={points:,}, k={k})",
         yaxis_title="Time (ms)",
         yaxis=dict(gridcolor="lightgray", showline=True, linecolor="#444", linewidth=1),
         xaxis=dict(showline=True, linecolor="#444", linewidth=1),
@@ -743,9 +741,18 @@ def plot_recall_controlled_speed(
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5,
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
-        margin=dict(t=110, b=110, l=80, r=40),
+        margin=dict(t=90, b=130, l=80, r=40),
+    )
+    fig.add_annotation(
+        text=(f"Approximate methods shown at their highest achievable recall (annotated). "
+              f"None reach {int(target_recall*100)}% recall at these settings."),
+        xref="paper", yref="paper",
+        x=0.5, y=-0.12,
+        showarrow=False,
+        font=dict(size=12, color="gray"),
+        align="center",
     )
     return fig
 
@@ -1089,7 +1096,7 @@ def create_plots() -> None:
         size=1_000_000,
         k=40,
         max_dimensions=15,
-        y_axis_cap=50,
+        y_axis_cap=4,
     )
     save_figure(fig4, os.path.join(
         PLOTS_DIR, "gpu_fgc_dimensional_scaling_1M_k40_all_algorithms.png"), 1400, 600)
