@@ -99,6 +99,29 @@ def _load_gpu_file(file_name: str) -> pd.DataFrame:
     return df
 
 
+def _load_gpu_errors(file_name: str) -> pd.DataFrame:
+    """Load unique error-status rows for a GPU benchmark file."""
+    path = os.path.join(GPU_DATA_DIR, file_name)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+
+    df = pd.read_csv(path)
+    df = _standardize_gpu_df(df)
+    if "status" not in df.columns:
+        return pd.DataFrame()
+
+    errors = df[df["status"] == "error"].copy()
+    if errors.empty:
+        return errors
+
+    return (
+        errors[["dimension", "size", "k", "status"]]
+        .dropna(subset=["dimension", "size", "k"])
+        .drop_duplicates()
+        .sort_values(["dimension", "size", "k"])
+    )
+
+
 def load_and_prepare_gpu_data() -> pd.DataFrame:
     print("Loading GPU performance data...")
 
@@ -228,6 +251,54 @@ def plot_fgc_speedup_analysis(
                 ),
             )
         )
+
+        error_data = _load_gpu_errors(alg_info["file_name"])
+        if not error_data.empty:
+            if analysis_type == "dimensions":
+                error_data = error_data[
+                    (error_data["size"] == size)
+                    & (error_data["k"] == k)
+                    & (error_data["dimension"] <= max_dimensions)
+                ].copy()
+            else:
+                error_data = error_data[
+                    (error_data["dimension"] == dimension)
+                    & (error_data["k"] == k)
+                    & (error_data["size"] <= MAX_DATASET_SIZE)
+                    & (error_data["size"].isin(allowed_sizes))
+                ].copy()
+
+            if not error_data.empty:
+                marker_y = 0.08 if not log_y else 0.12
+                failed = (
+                    error_data.groupby(x_col)
+                    .size()
+                    .reset_index(name="failed_runs")
+                    .sort_values(x_col)
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=failed[x_col],
+                        y=[marker_y] * len(failed),
+                        mode="markers",
+                        name=f"{alg_info['display_name']} failed",
+                        marker=dict(
+                            color=alg_info["color"],
+                            size=12,
+                            symbol="x",
+                            line=dict(color=alg_info["color"], width=2),
+                        ),
+                        showlegend=True,
+                        hovertemplate=(
+                            f"<b>{alg_info['display_name']} failed</b><br>"
+                            f"{x_title}: %{{x}}<br>"
+                            "Failed repeated runs: %{customdata}<br>"
+                            "No speedup shown because the benchmark returned error status."
+                            "<extra></extra>"
+                        ),
+                        customdata=failed["failed_runs"],
+                    )
+                )
 
     fig.add_trace(
         go.Scatter(
@@ -530,14 +601,14 @@ def plot_k_comparison_dimensional_analysis(data: pd.DataFrame) -> go.Figure:
         legend=dict(
             orientation="v",
             yanchor="top",
-            y=0.98,
-            xanchor="right",
-            x=0.98,
+            y=1.0,
+            xanchor="left",
+            x=1.01,
             bgcolor="rgba(255,255,255,0.8)",
             bordercolor="lightgray",
             borderwidth=1,
         ),
-        margin=dict(t=80, b=60, l=80, r=80),
+        margin=dict(t=80, b=60, l=80, r=260),
     )
     return fig
 
@@ -693,8 +764,10 @@ def plot_recall_controlled_speed(
                 continue
 
             if backend in ("fgc", "faiss"):
-                # Exact methods — always qualify
-                qualified = sub
+                # Exact methods — always qualify; force recall=1.0 to avoid
+                # float-precision artifacts in the recall_dist measurement
+                qualified = sub.copy()
+                qualified["recall"] = 1.0
             elif backend == "cuvs":
                 # Find cheapest itopk_size achieving target recall
                 param_col = "itopk_size"

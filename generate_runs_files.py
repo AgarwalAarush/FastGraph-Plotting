@@ -64,7 +64,11 @@ def build_combinations() -> List[Tuple[int, int, int]]:
     for k in (10, 40, 100):
         add_combos(combos, seen, ((3, p, k) for p in points))
 
-    # 4) dim in [2..15], points=5M, k=40
+    # 4) Full 1M dimensional sweep for the k-comparison plot
+    for k in (10, 40, 100):
+        add_combos(combos, seen, ((d, 1_000_000, k) for d in range(2, 11)))
+
+    # 5) dim in [2..15], points=5M, k=40
     add_combos(combos, seen, ((d, 5_000_000, 40) for d in range(2, 16)))
 
     return combos
