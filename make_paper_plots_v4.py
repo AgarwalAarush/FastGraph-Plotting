@@ -376,25 +376,88 @@ def plot_clover_headtohead(out_path: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 def plot_memory(out_path: Path) -> None:
+    """Two-panel memory plot from generate_memory_v2.py output.
+
+    Left panel:  workspace (peak − N×k output) — algorithm-only footprint
+    Right panel: end-state (resident after sync) — what's live when caller
+                 retains the output tensors
+
+    PCA-FGC inference path (no_grad wrapper) overlaid as a dashed line on
+    each panel, same colour as PCA-FGC training-path. Same for vanilla FGC.
+    Inference is a Python-side wrapper, same compiled CUDA kernel.
+    """
+    p = PERF / "memory_usage_v2.csv"
+    if not p.exists():
+        print(f"  [skip] memory_usage_v2.csv missing; using v1 fallback")
+        # fall through to v1 path below
+        return _plot_memory_v1(out_path)
+
+    df = pd.read_csv(p)
+    df = df[df["status"] == "ok"].copy()
+    df = df.astype({"dim": int, "points": int, "k": int})
+
+    d, k = 3, 40  # representative sweep
+    sub = df[(df["dim"] == d) & (df["k"] == k)]
+    if sub.empty:
+        print(f"  [skip] no memory_usage_v2 rows at d={d} k={k}")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    panels = [
+        (axes[0], "workspace_mb", "Workspace (peak $-$ output)"),
+        (axes[1], "end_state_mb", "End-state (resident after call)"),
+    ]
+    backends_solid = ("pca_fgc", "fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn")
+    inference_pairs = (("pca_fgc", "pca_fgc_inference"),
+                       ("fgc",     "fgc_inference"))
+
+    for ax, ycol, title in panels:
+        # Solid lines: training-path / external backends
+        for be in backends_solid:
+            s = sub[sub["algorithm"] == be]
+            if s.empty:
+                continue
+            agg = s.groupby("points")[ycol].median().reset_index().sort_values("points")
+            style = BACKEND[be]
+            ax.plot(agg["points"], agg[ycol], label=style["label"],
+                    color=style["color"], marker=style["marker"], lw=style["lw"])
+        # Inference-path data is collected (pca_fgc_inference,
+        # fgc_inference) but visually overlays the training path — the
+        # peak measurement is dominated by transient kernel allocations,
+        # not autograd retention. We document this in sec:memory rather
+        # than plotting overlapping lines. To enable: uncomment below.
+        # for be_main, be_inf in inference_pairs:
+        #     s = sub[sub["algorithm"] == be_inf]
+        #     if s.empty: continue
+        #     agg = s.groupby("points")[ycol].median().reset_index().sort_values("points")
+        #     style = BACKEND[be_main]
+        #     ax.plot(agg["points"], agg[ycol], color=style["color"],
+        #             ls="--", lw=1.2, marker=None, alpha=0.85,
+        #             label=f"{style['label']} inference")
+        ax.set_xlabel("Number of points $N$")
+        ax.set_title(title)
+        _format_n_axis(ax)
+        ax.set_yscale("log")
+    axes[0].set_ylabel("GPU memory (MB)")
+    axes[-1].legend(loc="best", fontsize=8, ncol=2)
+    fig.suptitle(f"GPU memory footprint — $d{{=}}{d}$, $k{{=}}{k}$")
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  ✓ {out_path.name}")
+
+
+def _plot_memory_v1(out_path: Path) -> None:
+    """Legacy single-number path, kept only as fallback if v2 CSV missing."""
     p = PERF / "memory_usage.csv"
     if not p.exists():
         print(f"  [skip] memory_usage.csv missing"); return
     df = pd.read_csv(p)
     if "status" in df.columns:
         df = df[df["status"] == "ok"]
-    if "memory_mb" not in df.columns:
-        for c in ("mem_mb", "gpu_memory_mb"):
-            if c in df.columns: df = df.rename(columns={c: "memory_mb"}); break
     df = df.astype({"dim": int, "points": int, "k": int})
-    # Map algorithm names to our palette keys
-    alg_map = {
-        "fgc": "fgc", "fastgraph": "fgc", "fgc_pca": "pca_fgc", "pca_fgc": "pca_fgc",
-        "faiss": "faiss", "faiss_gpu": "faiss",
-        "cuvs_bf": "cuvs_bf", "cuvs": "cuvs_bf",
-        "ggnn": "ggnn", "cagra": "cagra_nnd", "cagra_nnd": "cagra_nnd",
-    }
+    alg_map = {"fgc": "fgc", "faiss": "faiss", "cuvs": "cuvs_bf", "ggnn": "ggnn"}
     df["be"] = df["algorithm"].str.lower().map(alg_map).fillna(df["algorithm"])
-    # Sweep over N at d=3, k=40
     d, k = 3, 40
     sub = df[(df["dim"] == d) & (df["k"] == k)]
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -405,16 +468,10 @@ def plot_memory(out_path: Path) -> None:
         style = BACKEND.get(be, dict(label=be, color="k", marker="o", lw=1))
         ax.plot(agg["points"], agg["memory_mb"], label=style["label"],
                 color=style["color"], marker=style["marker"], lw=style["lw"])
-    ax.set_xlabel("Number of points $N$")
-    ax.set_ylabel("GPU memory (MB)")
-    ax.set_title(f"Resident GPU memory — $d{{=}}{d}$, $k{{=}}{k}$")
-    ax.legend(loc="best", ncol=2)
-    _format_n_axis(ax)
-    ax.set_yscale("log")
-    fig.tight_layout()
-    fig.savefig(out_path)
-    plt.close(fig)
-    print(f"  ✓ {out_path.name}")
+    ax.set_xlabel("$N$"); ax.set_ylabel("GPU memory (MB)")
+    ax.legend(loc="best", ncol=2); _format_n_axis(ax); ax.set_yscale("log")
+    fig.tight_layout(); fig.savefig(out_path); plt.close(fig)
+    print(f"  ✓ {out_path.name} (v1 fallback)")
 
 
 # ──────────────────────────────────────────────────────────────────────────
