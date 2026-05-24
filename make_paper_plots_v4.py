@@ -314,8 +314,9 @@ def plot_clover_headtohead(out_path: Path) -> None:
     ds_norm = {"hgcal": "hgcal", "synthgauss": "gauss", "synthuniform": "uniform"}
     cl["dataset"] = cl["dataset"].map(ds_norm)
     pf["dataset"] = pf["dataset"].map({"hgcal": "hgcal", "gauss": "gauss",
-                                       "synthgauss": "gauss",
-                                       "uniform": "uniform", "synthuniform": "uniform"}).fillna(pf["dataset"])
+                                       "synthgauss": "gauss", "synth_gauss": "gauss",
+                                       "uniform": "uniform", "synthuniform": "uniform",
+                                       "synth_uniform": "uniform"}).fillna(pf["dataset"])
 
     cl["n"] = cl["n"].astype(int)
     pf["points"] = pf["points"].astype(int)
