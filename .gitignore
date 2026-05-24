@@ -1,0 +1,11 @@
+# Slurm runtime logs (per-job, not artifacts)
+logs/
+
+# v4 paper plot outputs — these are mirrored into
+# Performance-Paper-PCA/media/ which is the canonical location.
+v4-plots/
+
+# Python cruft
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
