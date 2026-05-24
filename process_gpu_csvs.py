@@ -926,9 +926,9 @@ def plot_memory_footprint(
         font=dict(family="Arial", size=16),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1,
+        legend=dict(orientation="v", yanchor="top", y=0.98, xanchor="left", x=1.02,
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="lightgray", borderwidth=1),
-        margin=dict(t=110, b=70, l=80, r=40),
+        margin=dict(t=110, b=70, l=80, r=170),
     )
     return fig
 
@@ -1205,7 +1205,7 @@ def create_plots() -> None:
     print("\n9. Creating memory footprint comparison...")
     fig9 = plot_memory_footprint(dim=3, k=40)
     if fig9.data:
-        save_figure(fig9, os.path.join(PLOTS_DIR, "memory_footprint.png"), 900, 500)
+        save_figure(fig9, os.path.join(PLOTS_DIR, "memory_footprint.png"), 1050, 500)
 
     print("\n10. Creating recall vs speed Pareto front...")
     fig10 = plot_recall_speed_pareto(points=500_000, k=40)
