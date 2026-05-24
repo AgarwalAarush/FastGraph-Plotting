@@ -81,22 +81,38 @@ def load_ok(path: Path, status_col: str = "status") -> pd.DataFrame:
 
 
 def agg_median(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time_ms") -> pd.DataFrame:
+    """Median + interquartile range as error bars.
+
+    Using IQR (Q1, Q3) rather than min/max keeps single-rep outliers from
+    visually dominating the error bars. Median is the central estimator
+    used everywhere else in the paper, so the bar captures the bulk of
+    the per-cell distribution honestly.
+    """
     grp = df.groupby(list(group_cols))[val]
-    out = grp.agg(median="median", lo=lambda s: s.min(), hi=lambda s: s.max(), n="count").reset_index()
-    out["err_lo"] = out["median"] - out["lo"]
-    out["err_hi"] = out["hi"] - out["median"]
+    out = grp.agg(
+        median="median",
+        lo=lambda s: s.quantile(0.25),
+        hi=lambda s: s.quantile(0.75),
+        n="count",
+    ).reset_index()
+    out["err_lo"] = (out["median"] - out["lo"]).clip(lower=0)
+    out["err_hi"] = (out["hi"] - out["median"]).clip(lower=0)
     return out
 
 
-# Production HGCAL CSVs
+# Production HGCAL CSVs (v5 = merge of v4 baseline + extended mps:100 runs,
+# with drift-aware policy: cuVS BF / PCA-FGC fully merged, vanilla FGC /
+# FAISS / GGNN use extended-only on cells where the v4 baseline disagreed
+# with the clean extended median by >10%. See merge_baseline_extended.py
+# in Performance/ for the policy.)
 def load_hgcal_timing() -> Dict[str, pd.DataFrame]:
     sources = {
-        "pca_fgc":   "gpu_fgc_pca_performance.csv",
-        "fgc":       "gpu_fgc_gpu_performance.csv",
-        "faiss":     "gpu_faiss_gpu_performance.csv",
-        "cuvs_bf":   "gpu_cuvs_bf_performance.csv",
-        "ggnn":      "gpu_ggnn_performance.csv",
-        "cagra_nnd": "cagra_nn_descent.csv",
+        "pca_fgc":   "gpu_fgc_pca_v5.csv",
+        "fgc":       "gpu_fgc_gpu_v5.csv",
+        "faiss":     "gpu_faiss_gpu_v5.csv",
+        "cuvs_bf":   "gpu_cuvs_bf_v5.csv",
+        "ggnn":      "gpu_ggnn_v5.csv",
+        "cagra_nnd": "cagra_nn_descent_v5.csv",
     }
     out = {}
     for key, fn in sources.items():
