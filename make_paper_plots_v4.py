@@ -95,11 +95,11 @@ def agg_median_iqr(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time
     return out
 
 
-# Production HGCAL CSVs (v5 = merge of v4 baseline + extended mps:100 runs,
-# with drift-aware policy: cuVS BF / FastGraph fully merged, axis-aligned /
-# FAISS / GGNN use extended-only on cells where the v4 baseline disagreed
-# with the clean extended median by >10%. See merge_baseline_extended.py
-# in Performance/ for the policy.)
+# Production HGCAL CSVs. Most v5 files are the merge of v4 baseline +
+# extended mps:100 runs, with a drift-aware policy; see
+# merge_baseline_extended.py in Performance/ for the policy. CAGRA-nnd now
+# uses its full dedicated mps:100 sweep so the N-scaling plots are real curves,
+# not a single headline point.
 def load_hgcal_timing() -> Dict[str, pd.DataFrame]:
     sources = {
         "pca_fgc":   "gpu_fgc_pca_v5.csv",
@@ -107,11 +107,15 @@ def load_hgcal_timing() -> Dict[str, pd.DataFrame]:
         "faiss":     "gpu_faiss_gpu_v5.csv",
         "cuvs_bf":   "gpu_cuvs_bf_v5.csv",
         "ggnn":      "gpu_ggnn_v5.csv",
-        "cagra_nnd": "cagra_nn_descent_v5.csv",
+        "cagra_nnd": "cagra_nn_descent_mps100_full.csv",
     }
     out = {}
     for key, fn in sources.items():
         p = PERF / fn
+        if not p.exists() and key == "cagra_nnd":
+            p = PERF / "cagra_nn_descent_v5.csv"
+            print("  [warn] cagra_nn_descent_mps100_full.csv missing; "
+                  "falling back to headline-only cagra_nn_descent_v5.csv")
         if not p.exists():
             print(f"  [warn] {fn} missing; skipping {key}")
             continue
