@@ -22,7 +22,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import LogLocator, ScalarFormatter
+from matplotlib.ticker import NullLocator
 
 # ──────────────────────────────────────────────────────────────────────────
 # Paths
@@ -36,19 +36,20 @@ OUT.mkdir(parents=True, exist_ok=True)
 # Backend palette
 # ──────────────────────────────────────────────────────────────────────────
 
-# Keep PCA-FGC visually dominant (red, thicker). Vanilla FGC related (orange).
+# Keep FastGraph visually dominant (red, thicker). Axis-aligned ablations
+# remain available in the data but are not part of the public method identity.
 # Exact-GPU baselines in cool colors; approximate methods in muted grays/browns.
 BACKEND = {
-    "pca_fgc":   dict(label="FastGraph (PCA)", color="#D62728", marker="o", lw=2.4),
-    "fgc":       dict(label="FastGraph (axis)", color="#FF7F0E", marker="s", lw=1.6),
-    "faiss":     dict(label="FAISS-GPU (exact)", color="#2CA02C", marker="D", lw=1.6),
-    "cuvs_bf":   dict(label="cuVS BF (exact)",   color="#1F77B4", marker="^", lw=1.6),
-    "cagra_nnd": dict(label="CAGRA-nnd (approx)", color="#8C564B", marker="v", lw=1.4),
-    "ggnn":      dict(label="GGNN (approx)",     color="#7F7F7F", marker="x", lw=1.4),
+    "pca_fgc":   dict(label="FastGraph", color="#D62728", marker="o", lw=2.4),
+    "fgc":       dict(label="Axis-aligned ablation", color="#FF7F0E", marker="o", lw=1.6),
+    "faiss":     dict(label="FAISS-GPU (exact)", color="#2CA02C", marker="o", lw=1.6),
+    "cuvs_bf":   dict(label="cuVS BF (exact)",   color="#1F77B4", marker="o", lw=1.6),
+    "cagra_nnd": dict(label="CAGRA-nnd (approx)", color="#8C564B", marker="o", lw=1.4),
+    "ggnn":      dict(label="GGNN (approx)",     color="#7F7F7F", marker="o", lw=1.4),
     # CLOVER variants
-    "bitonic":   dict(label="CLOVER bitonic", color="#9467BD", marker="P", lw=1.6),
-    "warpwise":  dict(label="CLOVER warpwise", color="#17BECF", marker="*", lw=1.6),
-    "hubs":      dict(label="CLOVER hubs", color="#1A55A3", marker="X", lw=1.8),
+    "bitonic":   dict(label="CLOVER bitonic", color="#9467BD", marker="o", lw=1.6),
+    "warpwise":  dict(label="CLOVER warpwise", color="#17BECF", marker="o", lw=1.6),
+    "hubs":      dict(label="CLOVER hubs", color="#1A55A3", marker="o", lw=1.8),
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -80,20 +81,14 @@ def load_ok(path: Path, status_col: str = "status") -> pd.DataFrame:
     return df
 
 
-def agg_median(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time_ms") -> pd.DataFrame:
-    """Median + interquartile range as error bars.
-
-    Using IQR (Q1, Q3) rather than min/max keeps single-rep outliers from
-    visually dominating the error bars. Median is the central estimator
-    used everywhere else in the paper, so the bar captures the bulk of
-    the per-cell distribution honestly.
-    """
+def agg_median_iqr(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time_ms") -> pd.DataFrame:
+    """Median with interquartile range as robust error bars."""
     grp = df.groupby(list(group_cols))[val]
     out = grp.agg(
         median="median",
         lo=lambda s: s.quantile(0.25),
         hi=lambda s: s.quantile(0.75),
-        n="count",
+        reps="count",
     ).reset_index()
     out["err_lo"] = (out["median"] - out["lo"]).clip(lower=0)
     out["err_hi"] = (out["hi"] - out["median"]).clip(lower=0)
@@ -101,7 +96,7 @@ def agg_median(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time_ms"
 
 
 # Production HGCAL CSVs (v5 = merge of v4 baseline + extended mps:100 runs,
-# with drift-aware policy: cuVS BF / PCA-FGC fully merged, vanilla FGC /
+# with drift-aware policy: cuVS BF / FastGraph fully merged, axis-aligned /
 # FAISS / GGNN use extended-only on cells where the v4 baseline disagreed
 # with the clean extended median by >10%. See merge_baseline_extended.py
 # in Performance/ for the policy.)
@@ -158,23 +153,35 @@ def _plot_lines_by_backend(ax, dfs: Dict[str, pd.DataFrame], x_col: str, y_col: 
             continue
         df = df.sort_values(x_col)
         style = BACKEND[be]
+        center_col = "median" if "median" in df.columns else y_col
         if errorbars and "err_lo" in df.columns:
-            ax.errorbar(df[x_col], df["median"],
+            ax.errorbar(df[x_col], df[center_col],
                         yerr=[df["err_lo"], df["err_hi"]],
                         label=style["label"], color=style["color"],
                         marker=style["marker"], lw=style["lw"], capsize=2)
         else:
-            yvals = df[y_col] if y_col in df.columns else df["median"]
+            yvals = df[y_col] if y_col in df.columns else df[center_col]
             ax.plot(df[x_col], yvals, label=style["label"], color=style["color"],
                     marker=style["marker"], lw=style["lw"])
     if log_y:
-        ax.set_yscale("log")
+        _format_log_y_axis(ax)
+
+
+def _format_log_y_axis(ax) -> None:
+    ax.set_yscale("log")
+    ax.yaxis.set_minor_locator(NullLocator())
+    ax.grid(True, which="major", axis="both", alpha=0.3, linestyle="--")
+    ax.grid(False, which="minor", axis="y")
 
 
 def _format_n_axis(ax) -> None:
-    ax.set_xscale("log")
+    ax.set_xscale("linear")
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(
-        lambda x, _: f"{int(x/1000)}k" if x < 1_000_000 else f"{int(x/1_000_000)}M"))
+        lambda x, _: f"{int(x/1_000_000)}M"))
+    xmax = ax.get_xlim()[1]
+    tick_candidates = [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000]
+    ticks = [t for t in tick_candidates if t <= xmax * 1.01]
+    ax.set_xticks(ticks)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -188,13 +195,13 @@ def plot_hgcal_dim_scaling_5M(dfs: Dict[str, pd.DataFrame], out_path: Path) -> N
     for be, df in dfs.items():
         sub = df[(df["points"] == N) & (df["k"] == k)]
         if sub.empty: continue
-        agg_dfs[be] = agg_median(sub, ["dim"]).rename(columns={"dim": "x"}).assign(x=lambda d: d["x"])
+        agg_dfs[be] = agg_median_iqr(sub, ["dim"]).rename(columns={"dim": "x"}).assign(x=lambda d: d["x"])
     for be, a in agg_dfs.items():
         a.rename(columns={"x": "dim"}, inplace=True)
     _plot_lines_by_backend(ax, agg_dfs, "dim", "median",
-                            ["pca_fgc", "fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
+                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
     ax.set_xlabel("Dimension $d$")
-    ax.set_ylabel("Wall-clock (ms)")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
     ax.set_title(f"HGCAL kNN graph build — $N{{=}}5\\mathrm{{M}}$, $k{{=}}{k}$")
     ax.legend(loc="best", ncol=2)
     ax.set_xticks(range(2, 11))
@@ -216,13 +223,13 @@ def plot_hgcal_k_comparison_1M(dfs: Dict[str, pd.DataFrame], out_path: Path) -> 
         for be, df in dfs.items():
             sub = df[(df["points"] == N) & (df["k"] == k)]
             if sub.empty: continue
-            agg_dfs[be] = agg_median(sub, ["dim"])
+            agg_dfs[be] = agg_median_iqr(sub, ["dim"])
         _plot_lines_by_backend(ax, agg_dfs, "dim", "median",
-                                ["pca_fgc", "fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
+                                ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
         ax.set_xlabel("Dimension $d$")
         ax.set_title(f"$k{{=}}{k}$")
         ax.set_xticks(range(2, 11))
-    axes[0].set_ylabel("Wall-clock (ms)")
+    axes[0].set_ylabel("Wall-clock (ms, log scale)")
     axes[-1].legend(loc="lower right", fontsize=8, ncol=2)
     fig.suptitle(f"HGCAL — $N{{=}}1\\mathrm{{M}}$, varying $k$")
     fig.tight_layout()
@@ -243,11 +250,13 @@ def plot_hgcal_size_scaling(dfs: Dict[str, pd.DataFrame], dim: int, out_path: Pa
     for be, df in dfs.items():
         sub = df[(df["dim"] == dim) & (df["k"] == k)]
         if sub.empty: continue
-        agg_dfs[be] = agg_median(sub, ["points"]).rename(columns={"points": "points"})
+        agg_dfs[be] = agg_median_iqr(sub, ["points"]).rename(columns={"points": "points"})
+    size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"]
+                  if be in agg_dfs and len(agg_dfs[be]) >= 2]
     _plot_lines_by_backend(ax, agg_dfs, "points", "median",
-                            ["pca_fgc", "fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
+                            size_order)
     ax.set_xlabel("Number of points $N$")
-    ax.set_ylabel("Wall-clock (ms)")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
     ax.set_title(f"HGCAL — $d{{=}}{dim}$, $k{{=}}{k}$ {title_suffix}".strip())
     ax.legend(loc="best", ncol=2)
     _format_n_axis(ax)
@@ -268,17 +277,14 @@ def plot_synth_dim_scaling(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None
     for be, df in dfs.items():
         sub = df[(df["points"] == N) & (df["k"] == k)]
         if sub.empty: continue
-        agg_dfs[be] = agg_median(sub, ["dim"])
+        agg_dfs[be] = agg_median_iqr(sub, ["dim"])
     _plot_lines_by_backend(ax, agg_dfs, "dim", "median",
-                            ["pca_fgc", "fgc", "cuvs_bf", "faiss", "cagra_nnd"])
+                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"])
     ax.set_xlabel("Dimension $d$")
-    ax.set_ylabel("Wall-clock (ms)")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
     ax.set_title(f"Isotropic Gaussian $\\mathcal{{N}}(0,I_d)$ — $N{{=}}1\\mathrm{{M}}$, $k{{=}}{k}$")
     ax.legend(loc="best", ncol=2)
     ax.set_xticks(range(2, 11))
-    # Annotate crossover at d=7
-    ax.axvline(7, ls=":", color="k", alpha=0.4)
-    ax.text(7.1, ax.get_ylim()[1]*0.5, "crossover\n($d{=}7$)", fontsize=9, alpha=0.7)
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -296,14 +302,58 @@ def plot_synth_size_scaling(dfs: Dict[str, pd.DataFrame], dim: int, out_path: Pa
     for be, df in dfs.items():
         sub = df[(df["dim"] == dim) & (df["k"] == k)]
         if sub.empty: continue
-        agg_dfs[be] = agg_median(sub, ["points"])
+        agg_dfs[be] = agg_median_iqr(sub, ["points"])
+    size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"]
+                  if be in agg_dfs and len(agg_dfs[be]) >= 2]
     _plot_lines_by_backend(ax, agg_dfs, "points", "median",
-                            ["pca_fgc", "fgc", "cuvs_bf", "faiss", "cagra_nnd"])
+                            size_order)
     ax.set_xlabel("Number of points $N$")
-    ax.set_ylabel("Wall-clock (ms)")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
     ax.set_title(f"Isotropic Gaussian — $d{{=}}{dim}$, $k{{=}}{k}$")
     ax.legend(loc="best", ncol=2)
     _format_n_axis(ax)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  ✓ {out_path.name}")
+
+
+def plot_synth_summary(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
+    fig = plt.figure(figsize=(9, 7))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.05, 1.0])
+    ax_dim = fig.add_subplot(gs[0, :])
+    ax_d3 = fig.add_subplot(gs[1, 0])
+    ax_d8 = fig.add_subplot(gs[1, 1], sharey=ax_d3)
+
+    N, k = 1_000_000, 40
+    agg_dfs = {}
+    for be, df in dfs.items():
+        sub = df[(df["points"] == N) & (df["k"] == k)]
+        if sub.empty: continue
+        agg_dfs[be] = agg_median_iqr(sub, ["dim"])
+    _plot_lines_by_backend(ax_dim, agg_dfs, "dim", "median",
+                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"])
+    ax_dim.set_xlabel("Dimension $d$")
+    ax_dim.set_ylabel("Wall-clock (ms, log scale)")
+    ax_dim.set_title(f"Dimensional scaling — $N{{=}}1\\mathrm{{M}}$, $k{{=}}{k}$")
+    ax_dim.set_xticks(range(2, 11))
+    ax_dim.legend(loc="best", ncol=2, fontsize=8)
+
+    for ax, dim in ((ax_d3, 3), (ax_d8, 8)):
+        agg_dfs = {}
+        for be, df in dfs.items():
+            sub = df[(df["dim"] == dim) & (df["k"] == k)]
+            if sub.empty: continue
+            agg_dfs[be] = agg_median_iqr(sub, ["points"])
+        size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"]
+                      if be in agg_dfs and len(agg_dfs[be]) >= 2]
+        _plot_lines_by_backend(ax, agg_dfs, "points", "median", size_order)
+        ax.set_xlabel("Number of points $N$")
+        ax.set_title(f"Dataset-size scaling — $d{{=}}{dim}$, $k{{=}}{k}$")
+        _format_n_axis(ax)
+    ax_d3.set_ylabel("Wall-clock (ms, log scale)")
+    ax_d8.tick_params(labelleft=False)
+    fig.suptitle("Isotropic Gaussian $\\mathcal{N}(0,I_d)$")
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -345,24 +395,27 @@ def plot_clover_headtohead(out_path: Path) -> None:
         for alg in ("bitonic", "warpwise", "hubs"):
             sub = cl_ds[cl_ds["algorithm"] == alg]
             if sub.empty: continue
-            agg = sub.groupby("n")["time_ms"].median().reset_index().sort_values("n")
+            agg = agg_median_iqr(sub, ["n"]).sort_values("n")
             style = BACKEND[alg]
-            ax.plot(agg["n"], agg["time_ms"], label=style["label"],
-                    color=style["color"], marker=style["marker"], lw=style["lw"])
-        # PCA-FGC + vanilla FGC lines
+            ax.errorbar(agg["n"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
+                        label=style["label"], color=style["color"],
+                        marker=style["marker"], lw=style["lw"], capsize=2)
+        # FastGraph line. The axis-aligned implementation is an internal
+        # ablation and is kept out of this external head-to-head figure.
         pf_ds = pf[pf["dataset"] == ds_key]
-        for var, be_key in (("pca", "pca_fgc"), ("vanilla", "fgc")):
+        for var, be_key in (("pca", "pca_fgc"),):
             sub = pf_ds[pf_ds["variant"] == var]
             if sub.empty: continue
-            agg = sub.groupby("points")["time_ms"].median().reset_index().sort_values("points")
+            agg = agg_median_iqr(sub, ["points"]).sort_values("points")
             style = BACKEND[be_key]
-            ax.plot(agg["points"], agg["time_ms"], label=style["label"],
-                    color=style["color"], marker=style["marker"], lw=style["lw"])
+            ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
+                        label=style["label"], color=style["color"],
+                        marker=style["marker"], lw=style["lw"], capsize=2)
         ax.set_xlabel("Number of points $N$")
         ax.set_title(titles[ds_key])
-        ax.set_yscale("log")
+        _format_log_y_axis(ax)
         _format_n_axis(ax)
-    axes[0].set_ylabel("Wall-clock (ms)")
+    axes[0].set_ylabel("Wall-clock (ms, log scale)")
     axes[-1].legend(loc="best", fontsize=8)
     fig.suptitle("CLOVER head-to-head at $d{=}3$, $k{=}40$")
     fig.tight_layout()
@@ -382,8 +435,8 @@ def plot_memory(out_path: Path) -> None:
     Right panel: end-state (resident after sync) — what's live when caller
                  retains the output tensors
 
-    PCA-FGC inference path (no_grad wrapper) overlaid as a dashed line on
-    each panel, same colour as PCA-FGC training-path. Same for vanilla FGC.
+    FastGraph inference path (no_grad wrapper) can be overlaid as a dashed
+    line on each panel, same colour as the training-path measurement.
     Inference is a Python-side wrapper, same compiled CUDA kernel.
     """
     p = PERF / "memory_usage_v2.csv"
@@ -407,9 +460,8 @@ def plot_memory(out_path: Path) -> None:
         (axes[0], "workspace_mb", "Workspace (peak $-$ output)"),
         (axes[1], "end_state_mb", "End-state (resident after call)"),
     ]
-    backends_solid = ("pca_fgc", "fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn")
-    inference_pairs = (("pca_fgc", "pca_fgc_inference"),
-                       ("fgc",     "fgc_inference"))
+    backends_solid = ("pca_fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn")
+    inference_pairs = (("pca_fgc", "pca_fgc_inference"),)
 
     for ax, ycol, title in panels:
         # Solid lines: training-path / external backends
@@ -417,10 +469,11 @@ def plot_memory(out_path: Path) -> None:
             s = sub[sub["algorithm"] == be]
             if s.empty:
                 continue
-            agg = s.groupby("points")[ycol].median().reset_index().sort_values("points")
+            agg = agg_median_iqr(s, ["points"], ycol).sort_values("points")
             style = BACKEND[be]
-            ax.plot(agg["points"], agg[ycol], label=style["label"],
-                    color=style["color"], marker=style["marker"], lw=style["lw"])
+            ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
+                        label=style["label"], color=style["color"],
+                        marker=style["marker"], lw=style["lw"], capsize=2)
         # Inference-path data is collected (pca_fgc_inference,
         # fgc_inference) but visually overlays the training path — the
         # peak measurement is dominated by transient kernel allocations,
@@ -437,7 +490,7 @@ def plot_memory(out_path: Path) -> None:
         ax.set_xlabel("Number of points $N$")
         ax.set_title(title)
         _format_n_axis(ax)
-        ax.set_yscale("log")
+        _format_log_y_axis(ax)
     axes[0].set_ylabel("GPU memory (MB)")
     axes[-1].legend(loc="best", fontsize=8, ncol=2)
     fig.suptitle(f"GPU memory footprint — $d{{=}}{d}$, $k{{=}}{k}$")
@@ -461,15 +514,16 @@ def _plot_memory_v1(out_path: Path) -> None:
     d, k = 3, 40
     sub = df[(df["dim"] == d) & (df["k"] == k)]
     fig, ax = plt.subplots(figsize=(8, 5))
-    for be in ("pca_fgc", "fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn"):
+    for be in ("pca_fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn"):
         s = sub[sub["be"] == be]
         if s.empty: continue
-        agg = s.groupby("points")["memory_mb"].median().reset_index().sort_values("points")
+        agg = agg_median_iqr(s, ["points"], "memory_mb").sort_values("points")
         style = BACKEND.get(be, dict(label=be, color="k", marker="o", lw=1))
-        ax.plot(agg["points"], agg["memory_mb"], label=style["label"],
-                color=style["color"], marker=style["marker"], lw=style["lw"])
+        ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
+                    label=style["label"], color=style["color"],
+                    marker=style["marker"], lw=style["lw"], capsize=2)
     ax.set_xlabel("$N$"); ax.set_ylabel("GPU memory (MB)")
-    ax.legend(loc="best", ncol=2); _format_n_axis(ax); ax.set_yscale("log")
+    ax.legend(loc="best", ncol=2); _format_n_axis(ax); _format_log_y_axis(ax)
     fig.tight_layout(); fig.savefig(out_path); plt.close(fig)
     print(f"  ✓ {out_path.name} (v1 fallback)")
 
@@ -592,8 +646,8 @@ def plot_recall_speed_pareto(out_path: Path) -> None:
         ax.scatter(s["recall"], s["time_ms"], label=style["label"],
                    color=style["color"], marker=style["marker"], s=60)
     ax.set_xlabel("Distance-based recall")
-    ax.set_ylabel("Wall-clock (ms)")
-    ax.set_yscale("log")
+    ax.set_ylabel("Wall-clock (ms, log scale)")
+    _format_log_y_axis(ax)
     ax.set_title("Recall–speed Pareto (d=3, N=500k, k=40)")
     ax.legend(loc="best")
     fig.tight_layout()
@@ -651,6 +705,7 @@ def main() -> None:
     plot_synth_dim_scaling(synth, OUT / "synth_dimensional_scaling_1M_k40_gpu.png")
     plot_synth_size_scaling(synth, dim=3, out_path=OUT / "synth_speedup_d3_gpu.png")
     plot_synth_size_scaling(synth, dim=8, out_path=OUT / "synth_speedup_d8_gpu.png")
+    plot_synth_summary(synth, OUT / "synth_summary_gpu.png")
 
     print("\n== CLOVER head-to-head ==")
     plot_clover_headtohead(OUT / "clover_headtohead_d3.png")
