@@ -138,9 +138,13 @@ def load_synth_timing() -> Dict[str, pd.DataFrame]:
         df = load_ok(p).astype({"dim": int, "points": int, "k": int})
         for be_name, df_be in df.groupby("backend"):
             # backend column uses "faiss_gpu", "cuvs_bf", "cagra_nnd"
-            key = {"faiss_gpu": "faiss", "cuvs_bf": "cuvs_bf", "cagra_nnd": "cagra_nnd"}.get(be_name)
+            key = {"faiss_gpu": "faiss", "cuvs_bf": "cuvs_bf", "cagra_nnd": "cagra_nnd", "ggnn": "ggnn"}.get(be_name)
             if key:
                 out[key] = df_be.copy()
+    p = PERF / "synth_ggnn_baseline.csv"
+    if p.exists():
+        df = load_ok(p).astype({"dim": int, "points": int, "k": int})
+        out["ggnn"] = df[df["backend"] == "ggnn"].copy()
     return out
 
 
@@ -283,7 +287,7 @@ def plot_synth_dim_scaling(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None
         if sub.empty: continue
         agg_dfs[be] = agg_median_iqr(sub, ["dim"])
     _plot_lines_by_backend(ax, agg_dfs, "dim", "median",
-                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"])
+                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
     ax.set_xlabel("Dimension $d$")
     ax.set_ylabel("Wall-clock (ms, log scale)")
     ax.set_title(f"Isotropic Gaussian $\\mathcal{{N}}(0,I_d)$ — $N{{=}}1\\mathrm{{M}}$, $k{{=}}{k}$")
@@ -307,7 +311,7 @@ def plot_synth_size_scaling(dfs: Dict[str, pd.DataFrame], dim: int, out_path: Pa
         sub = df[(df["dim"] == dim) & (df["k"] == k)]
         if sub.empty: continue
         agg_dfs[be] = agg_median_iqr(sub, ["points"])
-    size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"]
+    size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"]
                   if be in agg_dfs and len(agg_dfs[be]) >= 2]
     _plot_lines_by_backend(ax, agg_dfs, "points", "median",
                             size_order)
@@ -336,7 +340,7 @@ def plot_synth_summary(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
         if sub.empty: continue
         agg_dfs[be] = agg_median_iqr(sub, ["dim"])
     _plot_lines_by_backend(ax_dim, agg_dfs, "dim", "median",
-                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"])
+                            ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"])
     ax_dim.set_xlabel("Dimension $d$")
     ax_dim.set_ylabel("Wall-clock (ms, log scale)")
     ax_dim.set_title(f"Dimensional scaling — $N{{=}}1\\mathrm{{M}}$, $k{{=}}{k}$")
@@ -349,7 +353,7 @@ def plot_synth_summary(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
             sub = df[(df["dim"] == dim) & (df["k"] == k)]
             if sub.empty: continue
             agg_dfs[be] = agg_median_iqr(sub, ["points"])
-        size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd"]
+        size_order = [be for be in ["pca_fgc", "cuvs_bf", "faiss", "cagra_nnd", "ggnn"]
                       if be in agg_dfs and len(agg_dfs[be]) >= 2]
         _plot_lines_by_backend(ax, agg_dfs, "points", "median", size_order)
         ax.set_xlabel("Number of points $N$")
