@@ -40,16 +40,16 @@ OUT.mkdir(parents=True, exist_ok=True)
 # remain available in the data but are not part of the public method identity.
 # Exact-GPU baselines in cool colors; approximate methods in muted grays/browns.
 BACKEND = {
-    "pca_fgc":   dict(label="FastGraph", color="#D62728", marker="o", lw=2.4),
-    "fgc":       dict(label="Axis-aligned ablation", color="#FF7F0E", marker="o", lw=1.6),
-    "faiss":     dict(label="FAISS-GPU (exact)", color="#2CA02C", marker="o", lw=1.6),
-    "cuvs_bf":   dict(label="cuVS BF (exact)",   color="#1F77B4", marker="o", lw=1.6),
-    "cagra_nnd": dict(label="CAGRA-nnd (approx)", color="#8C564B", marker="o", lw=1.4),
-    "ggnn":      dict(label="GGNN (approx)",     color="#7F7F7F", marker="o", lw=1.4),
+    "pca_fgc":   dict(label="FastGraph", color="#D62728", marker="o", lw=2.6, ls="-"),
+    "fgc":       dict(label="Axis-aligned ablation", color="#FF7F0E", marker="o", lw=1.6, ls="-"),
+    "faiss":     dict(label="FAISS-GPU (exact)", color="#2CA02C", marker="s", lw=1.7, ls="-"),
+    "cuvs_bf":   dict(label="cuVS BF (exact)",   color="#1F77B4", marker="D", lw=1.7, ls="-"),
+    "cagra_nnd": dict(label="CAGRA-nnd (approx)", color="#8C564B", marker="^", lw=1.5, ls="--"),
+    "ggnn":      dict(label="GGNN (approx)",     color="#7F7F7F", marker="x", lw=1.5, ls=":"),
     # CLOVER variants
-    "bitonic":   dict(label="CLOVER bitonic", color="#9467BD", marker="o", lw=1.6),
-    "warpwise":  dict(label="CLOVER warpwise", color="#17BECF", marker="o", lw=1.6),
-    "hubs":      dict(label="CLOVER hubs", color="#1A55A3", marker="o", lw=1.8),
+    "bitonic":   dict(label="CLOVER bitonic", color="#9467BD", marker="s", lw=1.6, ls="-"),
+    "warpwise":  dict(label="CLOVER warpwise", color="#17BECF", marker="D", lw=1.6, ls="-"),
+    "hubs":      dict(label="CLOVER hubs", color="#1A55A3", marker="^", lw=1.8, ls="-"),
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -166,11 +166,13 @@ def _plot_lines_by_backend(ax, dfs: Dict[str, pd.DataFrame], x_col: str, y_col: 
             ax.errorbar(df[x_col], df[center_col],
                         yerr=[df["err_lo"], df["err_hi"]],
                         label=style["label"], color=style["color"],
-                        marker=style["marker"], lw=style["lw"], capsize=2)
+                        marker=style["marker"], lw=style["lw"],
+                        linestyle=style.get("ls", "-"), capsize=2)
         else:
             yvals = df[y_col] if y_col in df.columns else df[center_col]
             ax.plot(df[x_col], yvals, label=style["label"], color=style["color"],
-                    marker=style["marker"], lw=style["lw"])
+                    marker=style["marker"], lw=style["lw"],
+                    linestyle=style.get("ls", "-"))
     if log_y:
         _format_log_y_axis(ax)
 
@@ -407,7 +409,8 @@ def plot_clover_headtohead(out_path: Path) -> None:
             style = BACKEND[alg]
             ax.errorbar(agg["n"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
                         label=style["label"], color=style["color"],
-                        marker=style["marker"], lw=style["lw"], capsize=2)
+                        marker=style["marker"], lw=style["lw"],
+                        linestyle=style.get("ls", "-"), capsize=2)
         # FastGraph line. The axis-aligned implementation is an internal
         # ablation and is kept out of this external head-to-head figure.
         pf_ds = pf[pf["dataset"] == ds_key]
@@ -418,7 +421,8 @@ def plot_clover_headtohead(out_path: Path) -> None:
             style = BACKEND[be_key]
             ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
                         label=style["label"], color=style["color"],
-                        marker=style["marker"], lw=style["lw"], capsize=2)
+                        marker=style["marker"], lw=style["lw"],
+                        linestyle=style.get("ls", "-"), capsize=2)
         ax.set_xlabel("Number of points $N$")
         ax.set_title(titles[ds_key])
         _format_log_y_axis(ax)
@@ -481,7 +485,8 @@ def plot_memory(out_path: Path) -> None:
             style = BACKEND[be]
             ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
                         label=style["label"], color=style["color"],
-                        marker=style["marker"], lw=style["lw"], capsize=2)
+                        marker=style["marker"], lw=style["lw"],
+                        linestyle=style.get("ls", "-"), capsize=2)
         # Inference-path data is collected (pca_fgc_inference,
         # fgc_inference) but visually overlays the training path — the
         # peak measurement is dominated by transient kernel allocations,
@@ -526,10 +531,11 @@ def _plot_memory_v1(out_path: Path) -> None:
         s = sub[sub["be"] == be]
         if s.empty: continue
         agg = agg_median_iqr(s, ["points"], "memory_mb").sort_values("points")
-        style = BACKEND.get(be, dict(label=be, color="k", marker="o", lw=1))
+        style = BACKEND.get(be, dict(label=be, color="k", marker="o", lw=1, ls="-"))
         ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
                     label=style["label"], color=style["color"],
-                    marker=style["marker"], lw=style["lw"], capsize=2)
+                    marker=style["marker"], lw=style["lw"],
+                    linestyle=style.get("ls", "-"), capsize=2)
     ax.set_xlabel("$N$"); ax.set_ylabel("GPU memory (MB)")
     ax.legend(loc="best", ncol=2); _format_n_axis(ax); _format_log_y_axis(ax)
     fig.tight_layout(); fig.savefig(out_path); plt.close(fig)
@@ -626,7 +632,8 @@ def plot_recall_controlled(out_path: Path) -> None:
         agg = s.groupby("dim")["recall"].mean().reset_index().sort_values("dim")
         style = BACKEND[be]
         ax.plot(agg["dim"], agg["recall"], label=style["label"],
-                color=style["color"], marker=style["marker"], lw=style["lw"])
+                color=style["color"], marker=style["marker"], lw=style["lw"],
+                linestyle=style.get("ls", "-"))
     ax.set_xlabel("Dimension $d$")
     ax.set_ylabel("Distance-based recall")
     ax.set_ylim(0, 1.05)
@@ -684,7 +691,8 @@ def plot_recall_vs_dimension(out_path: Path) -> None:
         agg = s.groupby("dim")["recall"].mean().reset_index().sort_values("dim")
         style = BACKEND[be]
         ax.plot(agg["dim"], agg["recall"], label=style["label"],
-                color=style["color"], marker=style["marker"], lw=style["lw"])
+                color=style["color"], marker=style["marker"], lw=style["lw"],
+                linestyle=style.get("ls", "-"))
     ax.set_xlabel("Dimension $d$")
     ax.set_ylabel("Distance-based recall")
     ax.set_ylim(0, 1.05)
