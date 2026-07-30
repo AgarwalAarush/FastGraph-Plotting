@@ -24,6 +24,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import NullLocator
 
+# Keep text searchable and avoid Type 3 fonts in journal vector artwork.
+matplotlib.rcParams["pdf.fonttype"] = 42
+matplotlib.rcParams["ps.fonttype"] = 42
+
 # ──────────────────────────────────────────────────────────────────────────
 # Paths
 # ──────────────────────────────────────────────────────────────────────────
@@ -41,6 +45,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 # Exact-GPU baselines in cool colors; approximate methods in muted grays/browns.
 BACKEND = {
     "pca_fgc":   dict(label="FastGraph", color="#D62728", marker="o", lw=2.6, ls="-"),
+    "fgc_recall": dict(label="FastGraph axis kernel", color="#D62728", marker="o", lw=2.6, ls="-"),
     "fgc":       dict(label="Axis-aligned ablation", color="#FF7F0E", marker="o", lw=1.6, ls="-"),
     "faiss":     dict(label="FAISS-GPU (exact)", color="#2CA02C", marker="s", lw=1.7, ls="-"),
     "cuvs_bf":   dict(label="cuVS BF (exact)",   color="#1F77B4", marker="D", lw=1.7, ls="-"),
@@ -95,30 +100,32 @@ def agg_median_iqr(df: pd.DataFrame, group_cols: Sequence[str], val: str = "time
     return out
 
 
-# Production HGCAL CSVs. Most v5 files are the merge of v4 baseline +
-# extended mps:100 runs, with a drift-aware policy; see
-# merge_baseline_extended.py in Performance/ for the policy. CAGRA-nnd now
-# uses its full dedicated mps:100 sweep so the N-scaling plots are real curves,
-# not a single headline point.
+def save_figure(fig: plt.Figure, out_path: Path) -> None:
+    """Write the preview PNG and a vector PDF for paper inclusion."""
+    fig.savefig(out_path)
+    fig.savefig(out_path.with_suffix(".pdf"))
+
+
+# Production HGCAL CSVs. Use only the later serialized mps:100 sweeps for
+# cross-method plots. This avoids mixing the original mps:50 rows into the
+# plotted medians. The common extended grid contains all headline and
+# k-scaling cells plus five N-scaling points at d=3 and d=8.
 def load_hgcal_timing() -> Dict[str, pd.DataFrame]:
     sources = {
-        "pca_fgc":   "gpu_fgc_pca_v5.csv",
-        "fgc":       "gpu_fgc_gpu_v5.csv",
-        "faiss":     "gpu_faiss_gpu_v5.csv",
-        "cuvs_bf":   "gpu_cuvs_bf_v5.csv",
-        "ggnn":      "gpu_ggnn_v5.csv",
+        "pca_fgc":   "gpu_fgc_pca_extended.csv",
+        "fgc":       "gpu_fgc_gpu_extended.csv",
+        "faiss":     "gpu_faiss_gpu_extended.csv",
+        "cuvs_bf":   "gpu_cuvs_bf_extended.csv",
+        "ggnn":      "gpu_ggnn_extended.csv",
         "cagra_nnd": "cagra_nn_descent_mps100_full.csv",
     }
     out = {}
     for key, fn in sources.items():
         p = PERF / fn
-        if not p.exists() and key == "cagra_nnd":
-            p = PERF / "cagra_nn_descent_v5.csv"
-            print("  [warn] cagra_nn_descent_mps100_full.csv missing; "
-                  "falling back to headline-only cagra_nn_descent_v5.csv")
         if not p.exists():
-            print(f"  [warn] {fn} missing; skipping {key}")
-            continue
+            raise FileNotFoundError(
+                f"Required allocation-normalized HGCAL input is missing: {p}"
+            )
         df = load_ok(p)
         df = df.astype({"dim": int, "points": int, "k": int})
         out[key] = df
@@ -216,7 +223,7 @@ def plot_hgcal_dim_scaling_5M(dfs: Dict[str, pd.DataFrame], out_path: Path) -> N
     ax.legend(loc="best", ncol=2)
     ax.set_xticks(range(2, 11))
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -243,7 +250,7 @@ def plot_hgcal_k_comparison_1M(dfs: Dict[str, pd.DataFrame], out_path: Path) -> 
     axes[-1].legend(loc="lower right", fontsize=8, ncol=2)
     fig.suptitle(f"HGCAL — $N{{=}}1\\mathrm{{M}}$, varying $k$")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -271,7 +278,7 @@ def plot_hgcal_size_scaling(dfs: Dict[str, pd.DataFrame], dim: int, out_path: Pa
     ax.legend(loc="best", ncol=2)
     _format_n_axis(ax)
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -296,7 +303,7 @@ def plot_synth_dim_scaling(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None
     ax.legend(loc="best", ncol=2)
     ax.set_xticks(range(2, 11))
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -323,7 +330,7 @@ def plot_synth_size_scaling(dfs: Dict[str, pd.DataFrame], dim: int, out_path: Pa
     ax.legend(loc="best", ncol=2)
     _format_n_axis(ax)
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -365,7 +372,7 @@ def plot_synth_summary(dfs: Dict[str, pd.DataFrame], out_path: Path) -> None:
     ax_d8.tick_params(labelleft=False)
     fig.suptitle("Isotropic Gaussian $\\mathcal{N}(0,I_d)$")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -431,7 +438,7 @@ def plot_clover_headtohead(out_path: Path) -> None:
     axes[-1].legend(loc="best", fontsize=8)
     fig.suptitle("CLOVER head-to-head at $d{=}3$, $k{=}40$")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -441,15 +448,11 @@ def plot_clover_headtohead(out_path: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 def plot_memory(out_path: Path) -> None:
-    """Two-panel memory plot from generate_memory_v2.py output.
+    """Post-call resident GPU memory from generate_memory_v2.py.
 
-    Left panel:  workspace (peak − N×k output) — algorithm-only footprint
-    Right panel: end-state (resident after sync) — what's live when caller
-                 retains the output tensors
-
-    FastGraph inference path (no_grad wrapper) can be overlaid as a dashed
-    line on each panel, same colour as the training-path measurement.
-    Inference is a Python-side wrapper, same compiled CUDA kernel.
+    The external NVML samples taken before and after each synchronized call
+    are valid across backends. Transient ``peak_mb`` is intentionally not
+    plotted: Python-thread polling was starved by backends that hold the GIL.
     """
     p = PERF / "memory_usage_v2.csv"
     if not p.exists():
@@ -467,48 +470,27 @@ def plot_memory(out_path: Path) -> None:
         print(f"  [skip] no memory_usage_v2 rows at d={d} k={k}")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-    panels = [
-        (axes[0], "workspace_mb", "Workspace (peak $-$ output)"),
-        (axes[1], "end_state_mb", "End-state (resident after call)"),
-    ]
+    fig, ax = plt.subplots(figsize=(8, 5))
     backends_solid = ("pca_fgc", "faiss", "cuvs_bf", "cagra_nnd", "ggnn")
-    inference_pairs = (("pca_fgc", "pca_fgc_inference"),)
-
-    for ax, ycol, title in panels:
-        # Solid lines: training-path / external backends
-        for be in backends_solid:
-            s = sub[sub["algorithm"] == be]
-            if s.empty:
-                continue
-            agg = agg_median_iqr(s, ["points"], ycol).sort_values("points")
-            style = BACKEND[be]
-            ax.errorbar(agg["points"], agg["median"], yerr=[agg["err_lo"], agg["err_hi"]],
-                        label=style["label"], color=style["color"],
-                        marker=style["marker"], lw=style["lw"],
-                        linestyle=style.get("ls", "-"), capsize=2)
-        # Inference-path data is collected (pca_fgc_inference,
-        # fgc_inference) but visually overlays the training path — the
-        # peak measurement is dominated by transient kernel allocations,
-        # not autograd retention. We document this in sec:memory rather
-        # than plotting overlapping lines. To enable: uncomment below.
-        # for be_main, be_inf in inference_pairs:
-        #     s = sub[sub["algorithm"] == be_inf]
-        #     if s.empty: continue
-        #     agg = s.groupby("points")[ycol].median().reset_index().sort_values("points")
-        #     style = BACKEND[be_main]
-        #     ax.plot(agg["points"], agg[ycol], color=style["color"],
-        #             ls="--", lw=1.2, marker=None, alpha=0.85,
-        #             label=f"{style['label']} inference")
-        ax.set_xlabel("Number of points $N$")
-        ax.set_title(title)
-        _format_n_axis(ax)
-        _format_log_y_axis(ax)
-    axes[0].set_ylabel("GPU memory (MB)")
-    axes[-1].legend(loc="best", fontsize=8, ncol=2)
-    fig.suptitle(f"GPU memory footprint — $d{{=}}{d}$, $k{{=}}{k}$")
+    for be in backends_solid:
+        s = sub[sub["algorithm"] == be]
+        if s.empty:
+            continue
+        agg = agg_median_iqr(s, ["points"], "end_state_mb").sort_values("points")
+        style = BACKEND[be]
+        ax.errorbar(agg["points"], agg["median"],
+                    yerr=[agg["err_lo"], agg["err_hi"]],
+                    label=style["label"], color=style["color"],
+                    marker=style["marker"], lw=style["lw"],
+                    linestyle=style.get("ls", "-"), capsize=2)
+    ax.set_xlabel("Number of points $N$")
+    ax.set_ylabel("Post-call resident GPU memory (MB)")
+    ax.set_title(f"GPU resident footprint after synchronized call — $d{{=}}{d}$, $k{{=}}{k}$")
+    ax.legend(loc="best", fontsize=8, ncol=2)
+    _format_n_axis(ax)
+    _format_log_y_axis(ax)
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -538,7 +520,7 @@ def _plot_memory_v1(out_path: Path) -> None:
                     linestyle=style.get("ls", "-"), capsize=2)
     ax.set_xlabel("$N$"); ax.set_ylabel("GPU memory (MB)")
     ax.legend(loc="best", ncol=2); _format_n_axis(ax); _format_log_y_axis(ax)
-    fig.tight_layout(); fig.savefig(out_path); plt.close(fig)
+    fig.tight_layout(); save_figure(fig, out_path); plt.close(fig)
     print(f"  ✓ {out_path.name} (v1 fallback)")
 
 
@@ -552,7 +534,7 @@ def _load_recall_dist() -> pd.DataFrame:
     only the highest-recall row per (dim,points,k) cell.
     """
     parts = []
-    for be, fn, qual in (("pca_fgc", "recall_dist_fgc.csv", None),
+    for be, fn, qual in (("fgc_recall", "recall_dist_fgc.csv", None),
                           ("faiss", "recall_dist_faiss.csv", None),
                           ("cagra_nnd", "recall_dist_cuvs.csv", "itopk_size"),
                           ("ggnn", "recall_dist_ggnn.csv", "tau_query")):
@@ -592,7 +574,7 @@ def plot_recall_exactness(out_path: Path) -> None:
         # fallback: any d=3, k=40
         sub = df[(df["dim"] == 3) & (df["k"] == 40)]
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    be_order = ["pca_fgc", "faiss", "cagra_nnd", "ggnn"]
+    be_order = ["fgc_recall", "faiss", "cagra_nnd", "ggnn"]
     means = []
     labels = []
     colors = []
@@ -612,7 +594,7 @@ def plot_recall_exactness(out_path: Path) -> None:
     for b, m in zip(bars, means):
         ax.text(b.get_x() + b.get_width()/2, m + 0.02, f"{m:.3f}", ha="center", fontsize=9)
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -626,7 +608,7 @@ def plot_recall_controlled(out_path: Path) -> None:
     df = df.astype({"dim": int, "points": int, "k": int})
     sub = df[(df["points"] == 500_000) & (df["k"] == 40)]
     fig, ax = plt.subplots(figsize=(8, 5))
-    for be in ("pca_fgc", "faiss", "cagra_nnd", "ggnn"):
+    for be in ("fgc_recall", "faiss", "cagra_nnd", "ggnn"):
         s = sub[sub["be"] == be]
         if s.empty: continue
         agg = s.groupby("dim")["recall"].mean().reset_index().sort_values("dim")
@@ -641,7 +623,7 @@ def plot_recall_controlled(out_path: Path) -> None:
     ax.set_title(f"Recall vs. dimension at $N{{=}}500\\mathrm{{k}}$, $k{{=}}40$ (best quality setting)")
     ax.legend(loc="lower left")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -658,7 +640,7 @@ def plot_recall_speed_pareto(out_path: Path) -> None:
         print(f"  [skip] recall_speed_pareto — time_ms not in recall_dist; using mean recall only")
         return plot_recall_controlled(out_path)
     fig, ax = plt.subplots(figsize=(8, 5))
-    for be in ("pca_fgc", "faiss", "cagra_nnd", "ggnn"):
+    for be in ("fgc_recall", "faiss", "cagra_nnd", "ggnn"):
         s = sub[sub["be"] == be]
         if s.empty: continue
         style = BACKEND[be]
@@ -670,7 +652,7 @@ def plot_recall_speed_pareto(out_path: Path) -> None:
     ax.set_title("Recall–speed Pareto (d=3, N=500k, k=40)")
     ax.legend(loc="best")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
@@ -685,7 +667,7 @@ def plot_recall_vs_dimension(out_path: Path) -> None:
     if sub.empty:
         sub = df[df["k"] == 40]
     fig, ax = plt.subplots(figsize=(8, 5))
-    for be in ("pca_fgc", "faiss", "cagra_nnd", "ggnn"):
+    for be in ("fgc_recall", "faiss", "cagra_nnd", "ggnn"):
         s = sub[sub["be"] == be]
         if s.empty: continue
         agg = s.groupby("dim")["recall"].mean().reset_index().sort_values("dim")
@@ -700,7 +682,7 @@ def plot_recall_vs_dimension(out_path: Path) -> None:
     ax.set_title("Recall vs. dimension (N=100k, k=40)")
     ax.legend(loc="lower left")
     fig.tight_layout()
-    fig.savefig(out_path)
+    save_figure(fig, out_path)
     plt.close(fig)
     print(f"  ✓ {out_path.name}")
 
