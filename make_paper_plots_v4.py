@@ -106,25 +106,24 @@ def save_figure(fig: plt.Figure, out_path: Path) -> None:
     fig.savefig(out_path.with_suffix(".pdf"))
 
 
-# Production HGCAL CSVs. Use only the later serialized mps:100 sweeps for
-# cross-method plots. This avoids mixing the original mps:50 rows into the
-# plotted medians. The common extended grid contains all headline and
-# k-scaling cells plus five N-scaling points at d=3 and d=8.
+# Production HGCAL CSVs. Use only the matched-input, serialized mps:100
+# campaign for cross-method plots. Every backend begins with the same
+# preloaded GPU-resident coordinates; the timed region includes construction
+# and search but excludes data loading and host-to-device transfer.
 def load_hgcal_timing() -> Dict[str, pd.DataFrame]:
     sources = {
-        "pca_fgc":   "gpu_fgc_pca_extended.csv",
-        "fgc":       "gpu_fgc_gpu_extended.csv",
-        "faiss":     "gpu_faiss_gpu_extended.csv",
-        "cuvs_bf":   "gpu_cuvs_bf_extended.csv",
-        "ggnn":      "gpu_ggnn_extended.csv",
-        "cagra_nnd": "cagra_nn_descent_mps100_full.csv",
+        "pca_fgc":   "gpu_matched_input_fgc_pca.csv",
+        "faiss":     "gpu_matched_input_faiss.csv",
+        "cuvs_bf":   "gpu_matched_input_cuvs_bf.csv",
+        "ggnn":      "gpu_matched_input_ggnn.csv",
+        "cagra_nnd": "gpu_matched_input_cagra_nnd.csv",
     }
     out = {}
     for key, fn in sources.items():
         p = PERF / fn
         if not p.exists():
             raise FileNotFoundError(
-                f"Required allocation-normalized HGCAL input is missing: {p}"
+                f"Required matched-input HGCAL input is missing: {p}"
             )
         df = load_ok(p)
         df = df.astype({"dim": int, "points": int, "k": int})
