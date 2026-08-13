@@ -1,7 +1,26 @@
 # FastGraphCompute Performance Analysis & Visualization
 
+## Paper release
+
+For the PCA-subspace FastGraph paper, check out the immutable
+`pca-fgc-paper-v1.0.0` tag. The paper figures are generated from the five
+matched-input MPS:100 timing CSVs in the companion
+[`fgc-performance`](https://github.com/AgarwalAarush/fgc-performance)
+repository:
+
+```bash
+conda run -n fgc python make_paper_plots_v4.py
+```
+
+Set `PERF_DIR` to the benchmark repository and `OUT_DIR` to the desired
+output directory when they are not in their default locations. The HGCAL
+plots deliberately use only `gpu_matched_input_*.csv`: every backend receives
+the same preloaded GPU-resident input, and all timings were collected in a
+serialized `--gres=mps:100` campaign. This script must run on a compute node
+on Falcon because it loads the timing CSVs with pandas.
+
 This repository contains benchmark runners and plotting tools for comparing
-[FastGraphCompute](https://github.com/jkiesele/FastGraphCompute/) (FGC) against
+[FastGraphCompute](https://github.com/AgarwalAarush/FastGraphCompute/) (FGC) against
 state-of-the-art nearest-neighbor search algorithms on CPU and GPU.
 
 ## Overview
@@ -143,7 +162,7 @@ Older CSV processing and plotting utilities live in `Old-Files/` for reference.
 ## Related Repository
 
 The benchmark data is intended to align with:
-**[FastGraphCompute](https://github.com/jkiesele/FastGraphCompute/)**.
+**[FastGraphCompute](https://github.com/AgarwalAarush/FastGraphCompute/)**.
 
 ## License
 
