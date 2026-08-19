@@ -6,7 +6,7 @@ This repository preserves the plotting workspace used by the original
 
 For the maintained paper reproduction workflow, use
 `AgarwalAarush/fgc-performance/reproduction/plots/make_paper_plots.py` at the
-matching `pca-fgc-paper-v1.1.0` tag. That script is self-contained with the
+matching `pca-fgc-paper-v1.2.0` tag. That script is self-contained with the
 canonical result inputs and checksums.
 
 No new development should be added here. The repository is retained for
